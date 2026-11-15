@@ -135,6 +135,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -1267,9 +1271,7 @@ fun SearchPanel(
                 val imeOpen = imeHeight > 0.dp
                 // Con el teclado abierto el panel crece una fila de iconos para
                 // que sigan visibles los anclados y los botones inferiores.
-                val effectiveHeight = if (imeOpen) {
-                    (panelHeight + 0.1f).coerceAtMost(0.98f)
-                } else panelHeight
+                val effectiveHeight = if (imeOpen) 0.99f else panelHeight
                 // Solo cambia el espacio útil interior; el fondo del panel
                 // mantiene siempre su altura y posición originales.
                 val bottomMargin = maxHeight * ((1f - effectiveHeight) / 2f)
@@ -1394,24 +1396,28 @@ fun SearchPanel(
                         AnimatedVisibility(visible = quickExpanded) {
                             Column(Modifier.fillMaxWidth().heightIn(max = drawerLimit)
                                 .verticalScroll(rememberScrollState())) {
-                                val preferredSettings = listOf(
-                                    "Batería", "Bluetooth", "Wi-Fi", "Almacenamiento",
-                                    "Sonido", "Pantalla", "Seguridad", "Ubicación", "Aplicaciones"
-                                )
-                                val excludedSettings = setOf("Datos móviles")
-                                val availableSettings = state.allItems.filter {
-                                    it.type == ItemType.SETTING && it.title !in excludedSettings
+                                val wifi = state.allItems.firstOrNull {
+                                    it.type == ItemType.SETTING && it.title.equals("Wi-Fi", true)
                                 }
-                                val system = (
-                                    preferredSettings.mapNotNull { title ->
-                                        availableSettings.firstOrNull { it.title.equals(title, true) }
-                                    } + availableSettings.filter { item ->
-                                        preferredSettings.none { it.equals(item.title, true) }
-                                    }
-                                ).take(panelColumns)
+                                val bluetooth = state.allItems.firstOrNull {
+                                    it.type == ItemType.SETTING && it.title.equals("Bluetooth", true)
+                                }
+                                val deviceSettings = state.allItems.firstOrNull {
+                                    it.type == ItemType.SETTING && it.title.equals("Ajustes", true)
+                                }
+                                val panelSettings = SearchItem(
+                                    "nexo:panel-settings", "Panel", "", ItemType.SETTING
+                                )
+                                val system = listOfNotNull(panelSettings, wifi, bluetooth, deviceSettings)
                                 if (system.isNotEmpty()) SearchBody(
                                     state = state.copy(query = "", sections = listOf(ResultSection("Ajustes", system))),
-                                    onItemClick = launchPanelItem, onOpenFloating = onOpenFloating,
+                                    onItemClick = { item ->
+                                        if (item.id == "nexo:panel-settings") {
+                                            val target = pages.indexOf(PanelPage.SETTINGS)
+                                            if (target >= 0) scope.launch { pagerState.animateScrollToPage(target) }
+                                        } else launchPanelItem(item)
+                                    },
+                                    onOpenFloating = onOpenFloating,
                                     onItemLongClick = { actionItem = it }, onRequestContacts = onRequestContacts,
                                     modifier = Modifier.fillMaxWidth().height(if (panelShowLabels) 66.dp else 48.dp),
                                     showSectionHeaders = false, showShortcutsNote = false, showTileLabels = panelShowLabels,
@@ -1421,11 +1427,19 @@ fun SearchPanel(
                             }
                         }
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            val iconBrush = remember {
+                                Brush.linearGradient(
+                                    listOf(Color(0xFF6FE3FF), Color(0xFF9C8CFF), Color(0xFFFF8FC7))
+                                )
+                            }
                             IconButton(onClick = { launchPanelItem(storeItem) }, modifier = Modifier.weight(1f)) {
                                 ItemIcon(storeItem, 20.dp)
                             }
                             IconButton(onClick = onExpand, modifier = Modifier.weight(1f)) {
-                                Icon(Icons.Filled.OpenInFull, "Abrir Nexo completo", Modifier.size(20.dp))
+                                Icon(
+                                    Icons.Filled.OpenInFull, "Abrir Nexo completo",
+                                    Modifier.size(20.dp).gradientTint(iconBrush), tint = Color.White
+                                )
                             }
                             IconButton(onClick = {
                                 if (view.isImeVisible()) {
@@ -1441,10 +1455,12 @@ fun SearchPanel(
                             }, modifier = Modifier.weight(1f)) {
                                 val imeVisible = view.isImeVisible()
                                 Icon(painterResource(R.drawable.ic_keyboard),
-                                    if (imeVisible) "Ocultar teclado" else "Mostrar teclado", Modifier.size(20.dp))
+                                    if (imeVisible) "Ocultar teclado" else "Mostrar teclado",
+                                    Modifier.size(20.dp).gradientTint(iconBrush), tint = Color.White)
                             }
                             IconButton(onClick = onOpenSettings, modifier = Modifier.weight(1f)) {
-                                Icon(Icons.Filled.Settings, "Abrir ajustes de Nexo", Modifier.size(20.dp))
+                                Icon(Icons.Filled.Settings, "Abrir ajustes de Nexo",
+                                    Modifier.size(20.dp).gradientTint(iconBrush), tint = Color.White)
                             }
                         }
                     }
@@ -2584,10 +2600,14 @@ private fun rememberVisibleImeHeight(): Dp {
         val listener = ViewTreeObserver.OnGlobalLayoutListener {
             view.getWindowVisibleDisplayFrame(rect)
             val rootHeight = view.rootView.height
-            val hidden = (rootHeight - rect.bottom).coerceAtLeast(0)
+            val frameHidden = (rootHeight - rect.bottom).coerceAtLeast(0)
+            val insets = ViewCompat.getRootWindowInsets(view)
+            val insetIme = insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
+            val visible = insets?.isVisible(WindowInsetsCompat.Type.ime()) == true ||
+                (rootHeight > 0 && frameHidden > rootHeight * 0.15f)
             // Un teclado siempre ocupa más que un quinto de la pantalla;
             // valores menores son barras de navegación.
-            heightPx = if (rootHeight > 0 && hidden > rootHeight * 0.15f) hidden else 0
+            heightPx = if (visible) maxOf(frameHidden, insetIme) else 0
         }
         view.viewTreeObserver.addOnGlobalLayoutListener(listener)
         listener.onGlobalLayout()
@@ -2596,6 +2616,14 @@ private fun rememberVisibleImeHeight(): Dp {
 
     return with(density) { heightPx.toDp() }
 }
+
+/** Paints the icon with a gradient instead of a flat tint. */
+private fun Modifier.gradientTint(brush: Brush): Modifier = this
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        drawRect(brush = brush, blendMode = BlendMode.SrcIn)
+    }
 
 private fun View.isImeVisible(): Boolean =
     ViewCompat.getRootWindowInsets(this)?.isVisible(WindowInsetsCompat.Type.ime()) == true

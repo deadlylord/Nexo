@@ -39,7 +39,7 @@ internal fun PanelSurface(modifier: Modifier = Modifier, content: @Composable Co
             else Modifier
         ),
         shape = shape,
-        color = if (glass) Color(0xFF10131A).copy(alpha = 0.92f)
+        color = if (glass) MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
         else MaterialTheme.colorScheme.surface.copy(alpha = .94f),
         border = if (glass) null else androidx.compose.foundation.BorderStroke(
             1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .35f)
@@ -52,9 +52,9 @@ internal fun PanelSurface(modifier: Modifier = Modifier, content: @Composable Co
                 if (glass) Modifier.background(
                     Brush.verticalGradient(
                         listOf(
-                            Color.White.copy(alpha = .10f),
+                            Color.White.copy(alpha = .16f),
                             Color.Transparent,
-                            Color.Black.copy(alpha = .18f)
+                            MaterialTheme.colorScheme.primary.copy(alpha = .08f)
                         )
                     )
                 ) else Modifier
