@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Nexo</string>
+    <string name="notification_channel_name">Panel lateral</string>
+    <string name="notification_title">Nexo está activo</string>
+    <string name="notification_text">Toca el borde de la pantalla para buscar</string>
+    <string name="shortcut_panel_short">Abrir panel</string>
+    <string name="shortcut_panel_long">Abrir el panel de Nexo</string>
+    <string name="shortcut_app_short">Abrir Nexo</string>
+    <string name="shortcut_app_long">Abrir la aplicación Nexo</string>
+    <string name="shortcut_unavailable">Este acceso de Nexo no está disponible</string>
+</resources>

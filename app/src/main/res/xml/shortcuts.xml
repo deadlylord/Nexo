@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="open_panel"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_panel"
+        android:shortcutShortLabel="@string/shortcut_panel_short"
+        android:shortcutLongLabel="@string/shortcut_panel_long"
+        android:shortcutDisabledMessage="@string/shortcut_unavailable">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.stree.nexo"
+            android:targetClass="com.stree.nexo.PanelShortcutActivity" />
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="open_nexo"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_app"
+        android:shortcutShortLabel="@string/shortcut_app_short"
+        android:shortcutLongLabel="@string/shortcut_app_long"
+        android:shortcutDisabledMessage="@string/shortcut_unavailable">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.stree.nexo"
+            android:targetClass="com.stree.nexo.MainActivity" />
+    </shortcut>
+</shortcuts>

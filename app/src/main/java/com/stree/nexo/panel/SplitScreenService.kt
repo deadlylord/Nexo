@@ -1,0 +1,227 @@
+package com.stree.nexo.panel
+
+import android.accessibilityservice.AccessibilityService
+import android.content.Context
+import android.content.Intent
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
+import android.view.accessibility.AccessibilityEvent
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.Toast
+
+/**
+ * Puente opcional para los atajos de dos apps.
+ *
+ * No lee contenido: solo usa la acción global del sistema para dividir la
+ * pantalla y abre la segunda app con LAUNCH_ADJACENT. Es el mismo mecanismo
+ * que usan los lanzadores de parejas: abrir A, esperar, dividir y abrir B.
+ */
+class SplitScreenService : AccessibilityService() {
+    private val handler = Handler(Looper.getMainLooper())
+    private var secondIntent: Intent? = null
+    private var waitingFor: String? = null
+    private var fallback: Runnable? = null
+    private var busy = false
+    private var assistance: View? = null
+
+    override fun onServiceConnected() {
+        instance = this
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // Solo se usa el nombre del paquete y el tipo de evento para saber
+        // cuándo la primera app ya tiene el foco. No se lee contenido.
+        if (event == null) return
+        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        val expected = waitingFor ?: return
+        if (event.packageName?.toString() != expected) return
+
+        waitingFor = null
+        fallback?.let { handler.removeCallbacks(it) }
+        fallback = null
+        // Margen para que la ventana termine de asentarse antes de dividir.
+        handler.postDelayed({ proceedToSplit() }, SETTLE_DELAY_MS)
+    }
+
+    /**
+     * Flujo directo, igual que un lanzador de parejas:
+     * 1. Se abre la primera app.
+     * 2. Se espera a que tenga el foco (evento de ventana) con un respaldo
+     *    por tiempo si el sistema no lo entrega.
+     * 3. Se ejecuta GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN.
+     * 4. Se abre la segunda con LAUNCH_ADJACENT.
+     *
+     * Si la acción global no está disponible, se ofrece el modo asistido
+     * desde Recientes en lugar de fallar en silencio.
+     */
+    private fun prepare(firstPackage: String, second: Intent): Boolean {
+        if (busy) {
+            notifyUser("Espera a que termine de abrirse la pareja actual.")
+            return false
+        }
+        busy = true
+        secondIntent = Intent(second)
+        waitingFor = firstPackage
+
+        // Respaldo: si no llega ningún evento (p. ej. la app ya estaba
+        // abierta), se intenta igualmente tras un margen prudente.
+        val proceed = Runnable {
+            waitingFor = null
+            proceedToSplit()
+        }
+        fallback = proceed
+        handler.postDelayed(proceed, FALLBACK_DELAY_MS)
+        return true
+    }
+
+    private fun proceedToSplit() {
+        if (secondIntent == null) return
+        fallback?.let { handler.removeCallbacks(it) }
+        fallback = null
+
+        val split = runCatching {
+            performGlobalAction(GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN)
+        }.getOrDefault(false)
+
+        if (!split) {
+            showRecentsAssistance()
+            return
+        }
+
+        handler.postDelayed({
+            launchSecond()
+            clearPending()
+        }, SECOND_DELAY_MS)
+    }
+
+    private fun launchSecond() {
+        val second = secondIntent ?: return
+        runCatching {
+            startActivity(Intent(second).addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or
+                    Intent.FLAG_ACTIVITY_MULTIPLE_TASK
+            ))
+        }.onFailure { notifyUser("No se pudo abrir la segunda app.") }
+    }
+
+    private fun clearPending() {
+        handler.removeCallbacksAndMessages(null)
+        secondIntent = null
+        waitingFor = null
+        fallback = null
+        busy = false
+        assistance?.let { view ->
+            runCatching { getSystemService(WindowManager::class.java).removeView(view) }
+        }
+        assistance = null
+    }
+
+    /** Respaldo sin clics automáticos: el usuario elige dividir en Recientes. */
+    private fun showRecentsAssistance() {
+        if (!performGlobalAction(GLOBAL_ACTION_RECENTS)) {
+            clearPending()
+            notifyUser("Este sistema no permite dividir desde Nexo. Usa Recientes → Pantalla dividida.")
+            return
+        }
+        val density = resources.displayMetrics.density
+        fun dp(value: Int) = (value * density).toInt()
+        val appName = runCatching {
+            val packageName = secondIntent?.`package`
+                ?: secondIntent?.component?.packageName
+                ?: ""
+            packageManager.getApplicationLabel(
+                packageManager.getApplicationInfo(packageName, 0)
+            ).toString()
+        }.getOrDefault("segunda app")
+        val windowManager = getSystemService(WindowManager::class.java)
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setBackgroundColor(Color.rgb(24, 24, 36))
+            addView(TextView(this@SplitScreenService).apply {
+                text = "Nexo · Pareja asistida\n1. Toca el icono de la primera app → Pantalla dividida (Split screen).\n2. Elige la segunda app en Recientes. En versiones anteriores también puedes usar el botón de abajo.\nSi la opción no aparece, esa app o el sistema no admite la división."
+                setTextColor(Color.WHITE)
+                textSize = 13f
+            })
+            addView(Button(this@SplitScreenService).apply {
+                text = "Abrir segunda: $appName"
+                setOnClickListener {
+                    launchSecond()
+                    clearPending()
+                }
+            })
+            addView(Button(this@SplitScreenService).apply {
+                text = "Cancelar"
+                setOnClickListener { clearPending() }
+            })
+        }
+        val params = WindowManager.LayoutParams(
+            (resources.displayMetrics.widthPixels - dp(24)).coerceAtLeast(dp(200)),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            y = dp(32)
+        }
+        assistance = panel
+        runCatching { windowManager.addView(panel, params) }.onFailure {
+            clearPending()
+            notifyUser("En Recientes elige Pantalla dividida y luego selecciona $appName manualmente.")
+            return
+        }
+        handler.postDelayed({ clearPending() }, 60_000)
+    }
+
+    private fun notifyUser(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    }
+
+    override fun onInterrupt() = clearPending()
+
+    override fun onDestroy() {
+        clearPending()
+        if (instance === this) instance = null
+        super.onDestroy()
+    }
+
+    companion object {
+        private const val SETTLE_DELAY_MS = 350L
+        private const val FALLBACK_DELAY_MS = 2_500L
+        private const val SECOND_DELAY_MS = 700L
+        private var instance: SplitScreenService? = null
+
+        fun launch(context: Context, firstPackage: String, secondPackage: String): Boolean {
+            val first = context.packageManager.getLaunchIntentForPackage(firstPackage) ?: return false
+            val second = context.packageManager.getLaunchIntentForPackage(secondPackage) ?: return false
+            val service = instance
+            if (service == null) {
+                Toast.makeText(context,
+                    "Activa Nexo · Parejas de apps en Accesibilidad y vuelve a tocar el atajo.",
+                    Toast.LENGTH_LONG).show()
+                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                return true
+            }
+            if (!service.prepare(firstPackage, second)) return false
+            return runCatching {
+                context.startActivity(first.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                true
+            }.getOrElse {
+                service.clearPending()
+                false
+            }
+        }
+    }
+}

@@ -1,0 +1,4 @@
+<resources>
+    <string name="split_accessibility_label">Nexo · Parejas de apps</string>
+    <string name="split_accessibility_description">Opcional, solo para tus atajos de dos apps. Nexo usa la acción del sistema Pantalla dividida y abre la segunda app al lado. Si el sistema no ofrece esa acción, abre Recientes y muestra botones propios: tú eliges Pantalla dividida y luego Abrir segunda. No lee textos, campos, contraseñas ni contenido de pantallas. Puedes desactivarlo cuando quieras. La compatibilidad depende del teléfono y de cada app; inicia desde pantalla completa.</string>
+</resources>
