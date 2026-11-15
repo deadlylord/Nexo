@@ -128,14 +128,14 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
 
     fun addPinnedShortcutAtSlot(label: String, target: String, slot: Int) {
         val shortcut = repository.addCustomShortcut(label, target)
-        repository.togglePinned("custom:${shortcut.id}", prepend = false)
+        repository.togglePinned("custom:${shortcut.id}")
         repository.assignSlot("custom:${shortcut.id}", slot)
         syncPinnedState()
         updateCustomItems()
     }
 
     fun assignPinnedSlot(id: String, slot: Int) {
-        if (id !in repository.pinnedIds) repository.togglePinned(id, prepend = false)
+        if (id !in repository.pinnedIds) repository.togglePinned(id)
         repository.assignSlot(id, slot)
         syncPinnedState()
         recompute(_state.value.query)

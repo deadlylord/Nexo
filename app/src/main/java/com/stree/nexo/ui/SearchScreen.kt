@@ -475,12 +475,13 @@ fun SearchBody(
             val currentItemKeys by rememberUpdatedState(itemKeys)
 
             // Al anclar/quitar elementos la lista cambia de secciones: vuelve arriba
-            // para que "Ancladas" quede visible.
+            // para que "Ancladas" quede visible. Con la cuadrícula invertida el
+            // índice 0 es la fila inferior, así que se respeta el anclaje.
             LaunchedEffect(state.pinnedIds) {
-                gridState.scrollToItem(0)
+                if (!bottomAnchored) gridState.scrollToItem(0)
             }
             LaunchedEffect(state.query) {
-                gridState.scrollToItem(0)
+                if (!bottomAnchored) gridState.scrollToItem(0)
             }
 
             CompositionLocalProvider(
@@ -1279,7 +1280,6 @@ fun SearchPanel(
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(bottom = keyboardOverlap)
                             .padding(horizontal = 6.dp)
                     ) {
                         SearchField(
@@ -1414,8 +1414,9 @@ fun SearchPanel(
                                     keyboard?.show()
                                 }
                             }, modifier = Modifier.weight(1f)) {
+                                val imeVisible = view.isImeVisible()
                                 Icon(painterResource(R.drawable.ic_keyboard),
-                                    if (keyboardHeight > 0.dp) "Ocultar teclado" else "Mostrar teclado", Modifier.size(20.dp))
+                                    if (imeVisible) "Ocultar teclado" else "Mostrar teclado", Modifier.size(20.dp))
                             }
                             IconButton(onClick = onOpenSettings, modifier = Modifier.weight(1f)) {
                                 Icon(Icons.Filled.Settings, "Abrir ajustes de Nexo", Modifier.size(20.dp))
@@ -1622,7 +1623,8 @@ private fun SearchPage(
                     onOpenFloating = onOpenFloating, onItemLongClick = onItemLongClick,
                     onRequestContacts = onRequestContacts, modifier = Modifier.fillMaxSize(), bottomContentPaddingDp = 0,
                     showSectionHeaders = false, showShortcutsNote = false, showTileLabels = showLabels,
-                    resultSide = side, centerItems = true, onEmptySpaceClick = onAddRequest,
+                    resultSide = side, centerItems = false, bottomAnchored = true,
+                    onEmptySpaceClick = onAddRequest,
                     onMovePinned = onMovePinned, onMovePinnedToSlot = onMovePinnedToSlot,
                     onAddSlot = onAddSlot, gridColumns = columns,
                     tileIconScale = iconScale, tileSpacingDp = spacingDp, onWidgetGesture = onWidgetGesture

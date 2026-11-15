@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -117,6 +118,7 @@ class MainActivity : ComponentActivity() {
                     onToggleContacts = ::toggleContacts,
                     onToggleHaptics = ::toggleHaptics,
                     onOpenOverlayPermission = ::openOverlayPermission,
+                    onRequestBatteryExemption = ::requestBatteryExemption,
                     onOpenHomeSettings = ::openHomeSettings,
                     onRefresh = {
                         viewModel.refresh()
@@ -239,6 +241,7 @@ class MainActivity : ComponentActivity() {
         panelEnabledState = true
         startPanelService()
         requestNotificationPermission()
+        requestBatteryExemptionIfNeeded()
     }
 
     private fun changePanelSide(side: PanelSide) {
@@ -320,6 +323,41 @@ class MainActivity : ComponentActivity() {
                 )
             )
         }
+    }
+
+    /**
+     * Android may kill the foreground service while it is idle in the background,
+     * and the activator bar disappears with it. Asking for the battery exemption
+     * is the only supported way to keep it alive on most manufacturers.
+     */
+    private fun requestBatteryExemptionIfNeeded() {
+        if (isBatteryUnrestricted()) return
+        requestBatteryExemption()
+    }
+
+    private fun requestBatteryExemption() {
+        runCatching {
+            startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName")
+                )
+            )
+        }.onFailure {
+            runCatching { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                .onFailure {
+                    Toast.makeText(
+                        this,
+                        "Abre los ajustes de batería y elige Sin restricciones para Nexo",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+        }
+    }
+
+    private fun isBatteryUnrestricted(): Boolean {
+        val manager = getSystemService(PowerManager::class.java) ?: return false
+        return manager.isIgnoringBatteryOptimizations(packageName)
     }
 
     private fun openHomeSettings() {

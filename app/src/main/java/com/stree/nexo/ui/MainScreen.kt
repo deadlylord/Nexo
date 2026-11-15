@@ -58,6 +58,7 @@ fun MainScreen(
     onToggleContacts: (Boolean) -> Unit,
     onToggleHaptics: (Boolean) -> Unit,
     onOpenOverlayPermission: () -> Unit,
+    onRequestBatteryExemption: () -> Unit,
     onOpenHomeSettings: () -> Unit,
     onRefresh: () -> Unit
 ) {
@@ -158,6 +159,7 @@ fun MainScreen(
                     onToggleContacts = onToggleContacts,
                     onToggleHaptics = onToggleHaptics,
                     onOpenOverlayPermission = onOpenOverlayPermission,
+                    onRequestBatteryExemption = onRequestBatteryExemption,
                     onOpenHomeSettings = onOpenHomeSettings,
                     onRefresh = onRefresh,
                     modifier = Modifier

@@ -69,7 +69,7 @@ class SearchRepository(context: Context) {
     fun assignSlot(id: String, slot: Int) = Prefs.setPinnedSlot(appContext, id, slot)
 
     /** Returns true when the item is now pinned, false when it was unpinned. */
-    fun togglePinned(id: String, prepend: Boolean = true): Boolean {
+    fun togglePinned(id: String): Boolean {
         val current = Prefs.pinnedIds(appContext).toMutableSet()
         val pinned = if (!current.add(id)) {
             current.remove(id)
@@ -77,7 +77,7 @@ class SearchRepository(context: Context) {
         } else {
             true
         }
-        Prefs.setPinnedIds(appContext, current, prepend)
+        Prefs.setPinnedIds(appContext, current)
         return pinned
     }
 

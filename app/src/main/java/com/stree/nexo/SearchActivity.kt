@@ -49,9 +49,10 @@ class SearchActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-        // Open with the keyboard ready; the footer button can still hide it.
+        // Resize keeps the pinned shortcuts above the keyboard even on devices
+        // that do not dispatch IME insets while the window is adjust-nothing.
         window.setSoftInputMode(
-            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING or
+            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
                 WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
         )
 

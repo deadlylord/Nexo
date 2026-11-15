@@ -263,16 +263,10 @@ object Prefs {
         prefs(context).edit().putString("whatsapp_link:$id", link).apply()
     }
 
-    fun setPinnedIds(context: Context, ids: Set<String>, prepend: Boolean = true) {
+    fun setPinnedIds(context: Context, ids: Set<String>) {
         val oldOrder = pinnedOrder(context)
-        val added = ids.filterNot { it in oldOrder }
-        val kept = oldOrder.filter { it in ids }
-        val newOrder = if (prepend) added + kept else kept + added
+        val newOrder = oldOrder.filter { it in ids } + ids.filterNot { it in oldOrder }
         val slots = pinnedSlots(context).filterKeys { it in ids }.toMutableMap()
-        if (prepend && added.isNotEmpty()) {
-            slots.replaceAll { _, position -> position + added.size }
-            added.forEachIndexed { index, id -> slots[id] = index }
-        }
         prefs(context).edit()
             .putStringSet("pinned_ids", ids.toSet())
             .putString("pinned_order", JSONArray(newOrder).toString())

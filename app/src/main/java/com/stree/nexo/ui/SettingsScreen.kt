@@ -77,6 +77,7 @@ fun SettingsScreen(
     onToggleContacts: (Boolean) -> Unit,
     onToggleHaptics: (Boolean) -> Unit,
     onOpenOverlayPermission: () -> Unit,
+    onRequestBatteryExemption: () -> Unit,
     onOpenHomeSettings: () -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier
@@ -137,7 +138,7 @@ fun SettingsScreen(
                 ActivationZoneSettings(panelSide)
 
                 Text(
-                    text = "El panel necesita el permiso \"Mostrar sobre otras apps\". En Android 13 o superior también se pide permiso para mostrar la notificación del servicio.",
+                    text = "La barra necesita el permiso \"Mostrar sobre otras apps\". Si desaparece sola, es Android cerrando el servicio en segundo plano: quita las restricciones de batería y vuelve a activar el panel.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 14.dp)
@@ -148,6 +149,13 @@ fun SettingsScreen(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                 ) {
                     Text("Abrir permiso de superposición")
+                }
+
+                OutlinedButton(
+                    onClick = onRequestBatteryExemption,
+                    modifier = Modifier.padding(horizontal = 14.dp)
+                ) {
+                    Text("Quitar restricciones de batería")
                 }
             }
         }
