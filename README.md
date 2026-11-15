@@ -235,3 +235,36 @@ o navegador; el enlace wa.me contiene únicamente el número del contacto.
   excluye su zona de toque (limitada por Android a ~200 dp de alto). La protección
   requiere mantener 350 ms antes de abrir; para usar Atrás se recomienda iniciar
   el gesto fuera del área de acción.
+
+## Código y APK
+
+El proyecto vive en GitHub: <https://github.com/deadlylord/Nexo>.
+
+### Compilar en esta PC
+
+```powershell
+.\gradlew.bat :app:assembleDebug
+```
+
+La APK queda en `app\build\outputs\apk\debug\app-debug.apk` y después se copia a
+mano al Escritorio y a Drive → Nexo → `Nexo-debug.apk`.
+
+### Trabajar desde otra computadora
+
+1. Instalar Git, JDK 21 y Android Studio (o solo el SDK de Android).
+2. `git clone https://github.com/deadlylord/Nexo.git`
+3. Abrir la carpeta con Android Studio y ejecutar `.\gradlew.bat :app:assembleDebug`.
+
+`local.properties` no se publica: Android Studio lo genera en cada equipo con la
+ruta del SDK local.
+
+### APK sin compilar nada
+
+Cada push a `main` compila en GitHub Actions y publica la APK en
+<https://github.com/deadlylord/Nexo/releases/tag/dev-latest>. Se puede descargar
+desde el teléfono e instalar directamente.
+
+Las compilaciones locales y las de CI usan la misma clave de depuración
+(`keystore/debug.keystore`), así que cualquier APK se instala sobre la anterior
+sin desinstalar. Esa clave es pública a propósito: sirve solo para pruebas y no
+debe usarse para publicar en Play Store.
