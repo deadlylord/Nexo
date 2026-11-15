@@ -16,6 +16,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import android.view.View
+import android.view.ViewTreeObserver
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -122,6 +123,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -1258,17 +1260,25 @@ fun SearchPanel(
             ) {
                 val panelWidth = minOf(maxWidth * 0.58f, 372.dp)
                 val panelHeight = Prefs.panelHeight(LocalContext.current)
-                val density = LocalDensity.current
-                val keyboardHeight = with(density) { WindowInsets.ime.getBottom(this).toDp() }
+                // Alto real del teclado medido con el layout de la ventana. Los
+                // insets llegan en cero en varios fabricantes, así que no
+                // alcanzan para reservar el espacio.
+                val imeHeight = rememberVisibleImeHeight()
+                val imeOpen = imeHeight > 0.dp
+                // Con el teclado abierto el panel crece una fila de iconos para
+                // que sigan visibles los anclados y los botones inferiores.
+                val effectiveHeight = if (imeOpen) {
+                    (panelHeight + 0.1f).coerceAtMost(0.98f)
+                } else panelHeight
                 // Solo cambia el espacio útil interior; el fondo del panel
                 // mantiene siempre su altura y posición originales.
-                val bottomMargin = maxHeight * ((1f - panelHeight) / 2f)
-                val keyboardOverlap = (keyboardHeight - bottomMargin).coerceAtLeast(0.dp)
-                val drawerLimit = (maxHeight * panelHeight - keyboardOverlap - 129.dp).coerceIn(0.dp, 180.dp)
+                val bottomMargin = maxHeight * ((1f - effectiveHeight) / 2f)
+                val keyboardOverlap = (imeHeight - bottomMargin).coerceAtLeast(0.dp)
+                val drawerLimit = (maxHeight * effectiveHeight - keyboardOverlap - 129.dp).coerceIn(0.dp, 180.dp)
 
                 PanelSurface(
                     modifier = Modifier
-                        .fillMaxHeight(panelHeight)
+                        .fillMaxHeight(effectiveHeight)
                         .width(panelWidth)
                         .padding(horizontal = 8.dp)
                         .clickable(
@@ -1280,6 +1290,7 @@ fun SearchPanel(
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
+                            .padding(bottom = keyboardOverlap)
                             .padding(horizontal = 6.dp)
                     ) {
                         SearchField(
@@ -1383,7 +1394,21 @@ fun SearchPanel(
                         AnimatedVisibility(visible = quickExpanded) {
                             Column(Modifier.fillMaxWidth().heightIn(max = drawerLimit)
                                 .verticalScroll(rememberScrollState())) {
-                                val system = state.allItems.filter { it.type == ItemType.SETTING }.take(panelColumns)
+                                val preferredSettings = listOf(
+                                    "Batería", "Bluetooth", "Wi-Fi", "Almacenamiento",
+                                    "Sonido", "Pantalla", "Seguridad", "Ubicación", "Aplicaciones"
+                                )
+                                val excludedSettings = setOf("Datos móviles")
+                                val availableSettings = state.allItems.filter {
+                                    it.type == ItemType.SETTING && it.title !in excludedSettings
+                                }
+                                val system = (
+                                    preferredSettings.mapNotNull { title ->
+                                        availableSettings.firstOrNull { it.title.equals(title, true) }
+                                    } + availableSettings.filter { item ->
+                                        preferredSettings.none { it.equals(item.title, true) }
+                                    }
+                                ).take(panelColumns)
                                 if (system.isNotEmpty()) SearchBody(
                                     state = state.copy(query = "", sections = listOf(ResultSection("Ajustes", system))),
                                     onItemClick = launchPanelItem, onOpenFloating = onOpenFloating,
@@ -1669,7 +1694,7 @@ private fun QuickSettingsPage(
     val settings = state.allItems.filter { it.type == ItemType.SETTING }
     val preferredOrder = listOf(
         "Batería", "Bluetooth", "Seguridad", "Wi-Fi", "Almacenamiento",
-        "Aplicaciones", "Datos móviles", "Pantalla", "Sonido", "Ubicación",
+        "Aplicaciones", "Pantalla", "Sonido", "Ubicación",
         "Idioma", "Fecha y hora", "Accesibilidad", "NFC", "VPN",
         "Pantalla de inicio", "Opciones de desarrollador", "Ajustes"
     )
@@ -2546,6 +2571,30 @@ internal fun Context.findActivity(): Activity? {
         current = current.baseContext
     }
     return null
+}
+
+@Composable
+private fun rememberVisibleImeHeight(): Dp {
+    val view = LocalView.current
+    val density = LocalDensity.current
+    var heightPx by remember { mutableStateOf(0) }
+
+    DisposableEffect(view) {
+        val rect = android.graphics.Rect()
+        val listener = ViewTreeObserver.OnGlobalLayoutListener {
+            view.getWindowVisibleDisplayFrame(rect)
+            val rootHeight = view.rootView.height
+            val hidden = (rootHeight - rect.bottom).coerceAtLeast(0)
+            // Un teclado siempre ocupa más que un quinto de la pantalla;
+            // valores menores son barras de navegación.
+            heightPx = if (rootHeight > 0 && hidden > rootHeight * 0.15f) hidden else 0
+        }
+        view.viewTreeObserver.addOnGlobalLayoutListener(listener)
+        listener.onGlobalLayout()
+        onDispose { view.viewTreeObserver.removeOnGlobalLayoutListener(listener) }
+    }
+
+    return with(density) { heightPx.toDp() }
 }
 
 private fun View.isImeVisible(): Boolean =
