@@ -47,8 +47,8 @@ Sesame Shortcuts pero con implementación propia, Jetpack Compose y APIs moderna
   (`market://search?...&c=apps`, con respaldo en la tienda web). En los resultados
   aparece la fila **Buscar "…" en Play Store** con icono de tienda, además de la
   búsqueda web. Con consulta vacía no abre nada.
-  En el panel lateral, la búsqueda permanece arriba y los resultados crecen desde
-  abajo: las primeras coincidencias quedan junto al teclado. La cuadrícula y sus
+  En el panel lateral los resultados se muestran como lista y crecen desde abajo:
+  la mejor coincidencia (resaltada, la que abre Enter) queda junto al teclado. La cuadrícula y sus
   títulos se alinean al lado del panel (derecha o izquierda). Debajo hay botones
   para volver a mostrar el teclado y abrir directamente los ajustes de Nexo.
 - **Contraste del panel**: tema oscuro en el panel lateral, texto claro y fondo
@@ -70,8 +70,9 @@ Sesame Shortcuts pero con implementación propia, Jetpack Compose y APIs moderna
   completa en el teléfono sin cambiar el indicador.
   Un deslizamiento desde el borde no abre Nexo, evitando activaciones al usar el
   gesto Atrás.
-- **Primera página**: anclados, sugerencias por hora, recientes, frecuentes y
-  ajustes rápidos, sin repetir elementos. Las etiquetas son configurables.
+- **Primera página**: solo los anclados, con toda la altura del panel. Los
+  **Recientes** y **Para esta hora** están en la página **Ajustes**, encima de los
+  ajustes rápidos. Las etiquetas son configurables.
 - **Atajos personalizados**: enlaces, `tel:`, `mailto:`, `sms:` y URLs.
 - **Menú Añadir con iconos**: permite crear accesos de aplicaciones, páginas
   web, pares de aplicaciones, carpetas, contactos para llamar y WhatsApp.

@@ -4,8 +4,6 @@ import android.app.Activity
 import android.content.Context
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.runtime.rememberUpdatedState
@@ -37,6 +35,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -103,6 +102,8 @@ import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tune
@@ -489,8 +490,10 @@ fun SearchBody(
             LaunchedEffect(state.pinnedIds) {
                 if (!bottomAnchored) gridState.scrollToItem(0)
             }
+            // Con la lista invertida el índice 0 es la fila inferior: así la
+            // mejor coincidencia queda siempre visible junto al teclado.
             LaunchedEffect(state.query) {
-                if (!bottomAnchored) gridState.scrollToItem(0)
+                gridState.scrollToItem(0)
             }
 
             CompositionLocalProvider(
@@ -1235,7 +1238,6 @@ fun SearchPanel(
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     val view = LocalView.current
-    var quickExpanded by remember { mutableStateOf(Prefs.quickDrawerExpanded(context)) }
     val storeItem = remember(context) { PlayStore.homeItem(context) }
     LaunchedEffect(Unit) { shown = true }
     LaunchedEffect(pagerState.currentPage) {
@@ -1295,7 +1297,6 @@ fun SearchPanel(
                 // mantiene siempre su altura y posición originales.
                 val bottomMargin = maxHeight * ((1f - effectiveHeight) / 2f)
                 val keyboardOverlap = (imeHeight - bottomMargin).coerceAtLeast(0.dp)
-                val drawerLimit = (maxHeight * effectiveHeight - keyboardOverlap - 129.dp).coerceIn(0.dp, 180.dp)
 
                 PanelSurface(
                     modifier = Modifier
@@ -1327,7 +1328,7 @@ fun SearchPanel(
                             onRequestContacts = onRequestContacts, modifier = Modifier.weight(1f),
                             showSectionHeaders = false, showShortcutsNote = false,
                             showTileLabels = panelShowLabels, gridColumns = panelColumns,
-                            resultSide = side, bottomAnchored = false, tileIconScale = panelIconScale,
+                            resultSide = side, bottomAnchored = true, tileIconScale = panelIconScale,
                             listMode = true
                         ) else HorizontalPager(
                             state = pagerState,
@@ -1375,7 +1376,12 @@ fun SearchPanel(
                                     QuickSettingsPage(
                                         state = state,
                                         onItemClick = launchPanelItem,
-                                        onOpenSettings = onOpenSettings
+                                        onOpenSettings = onOpenSettings,
+                                        onOpenFloating = onOpenFloating,
+                                        onItemLongClick = { actionItem = it },
+                                        columns = panelColumns,
+                                        iconScale = panelIconScale,
+                                        showLabels = panelShowLabels
                                     )
                                 }
 
@@ -1399,51 +1405,6 @@ fun SearchPanel(
                                 }
                                 PanelPage.WIDGETS -> WidgetsPage(active = pagerState.currentPage == page)
                             }
-                            }
-                        }
-                        Row(
-                            Modifier.fillMaxWidth().height(32.dp).clickable {
-                                quickExpanded = !quickExpanded
-                                Prefs.setQuickDrawerExpanded(context, quickExpanded)
-                            }, verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            Icon(if (quickExpanded) Icons.Filled.ExpandMore else Icons.Filled.ExpandLess,
-                                if (quickExpanded) "Contraer accesos y reproductor" else "Expandir accesos y reproductor",
-                                Modifier.size(18.dp))
-                            Text("Accesos y música", style = MaterialTheme.typography.labelSmall)
-                        }
-                        AnimatedVisibility(visible = quickExpanded) {
-                            Column(Modifier.fillMaxWidth().heightIn(max = drawerLimit)
-                                .verticalScroll(rememberScrollState())) {
-                                val wifi = state.allItems.firstOrNull {
-                                    it.type == ItemType.SETTING && it.title.equals("Wi-Fi", true)
-                                }
-                                val bluetooth = state.allItems.firstOrNull {
-                                    it.type == ItemType.SETTING && it.title.equals("Bluetooth", true)
-                                }
-                                val deviceSettings = state.allItems.firstOrNull {
-                                    it.type == ItemType.SETTING && it.title.equals("Ajustes", true)
-                                }
-                                val panelSettings = SearchItem(
-                                    "nexo:panel-settings", "Panel", "", ItemType.SETTING
-                                )
-                                val system = listOfNotNull(panelSettings, wifi, bluetooth, deviceSettings)
-                                if (system.isNotEmpty()) SearchBody(
-                                    state = state.copy(query = "", sections = listOf(ResultSection("Ajustes", system))),
-                                    onItemClick = { item ->
-                                        if (item.id == "nexo:panel-settings") {
-                                            val target = pages.indexOf(PanelPage.SETTINGS)
-                                            if (target >= 0) scope.launch { pagerState.animateScrollToPage(target) }
-                                        } else launchPanelItem(item)
-                                    },
-                                    onOpenFloating = onOpenFloating,
-                                    onItemLongClick = { actionItem = it }, onRequestContacts = onRequestContacts,
-                                    modifier = Modifier.fillMaxWidth().height(if (panelShowLabels) 66.dp else 48.dp),
-                                    showSectionHeaders = false, showShortcutsNote = false, showTileLabels = panelShowLabels,
-                                    gridColumns = panelColumns, tileIconScale = panelIconScale, bottomContentPaddingDp = 0
-                                )
-                                MiniPlayer(Modifier.fillMaxWidth())
                             }
                         }
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1645,39 +1606,9 @@ private fun SearchPage(
             val pinned = state.sections.flatMap { it.items }.filter {
                 it.id in state.pinnedIds && it.type != ItemType.SETTING
             }.distinctBy { it.id }
-            val recent = state.sections.firstOrNull { it.title == "Recientes" }?.items.orEmpty()
-            val frequent = state.sections.firstOrNull { it.title == "Frecuentes" }?.items.orEmpty()
-            val ranked = buildList {
-                for (index in 0 until columns) {
-                    recent.getOrNull(index)?.let { add(it) }
-                    frequent.getOrNull(index)?.let { add(it) }
-                }
-                addAll(state.sections.filter { it.title == "Para esta hora" || it.title == "Aplicaciones" }.flatMap { it.items })
-            }.filter { it.type == ItemType.APP && it.id !in state.pinnedIds }
-                .distinctBy { it.id }.take(columns * 2)
-            val rowHeight = if (showLabels) 66 else 48
-            BoxWithConstraints(Modifier.weight(1f)) {
-            val availableHeight = maxHeight
-            val suggestedRows = if (availableHeight < 170.dp) 0 else if (availableHeight < 300.dp) 1 else 2
-            val suggestions = ranked.take(columns * suggestedRows)
-            val occupiedRows = (suggestions.size + columns - 1) / columns
-            val sectionDecoration = 0
-            Column(Modifier.fillMaxSize()) {
-                if (suggestions.isNotEmpty()) {
-                PanelSection("Sugerencias", Modifier.fillMaxWidth()
-                    .height((rowHeight * occupiedRows + spacingDp * (occupiedRows - 1) + sectionDecoration).dp)) {
-                SearchBody(
-                    state = state.copy(sections = listOf(ResultSection("", suggestions))),
-                    onItemClick = onItemClick, onOpenFloating = onOpenFloating,
-                    onItemLongClick = onItemLongClick, onRequestContacts = onRequestContacts,
-                    modifier = Modifier.fillMaxSize(), bottomContentPaddingDp = 0,
-                    showSectionHeaders = false, showShortcutsNote = false, showTileLabels = showLabels,
-                    gridColumns = columns, tileIconScale = iconScale, tileSpacingDp = spacingDp
-                )
-                }
-                Spacer(Modifier.height(6.dp))
-                }
-                PanelSection("Favoritos", Modifier.weight(1f)) {
+            // Recientes y "Para esta hora" viven en la página Ajustes; aquí solo
+            // quedan los favoritos, con toda la altura disponible.
+            PanelSection("Favoritos", Modifier.weight(1f)) {
                 SearchBody(
                     state = state.copy(sections = listOf(ResultSection("Ancladas", pinned))),
                     onItemClick = onItemClick, onCallContact = onCallContact,
@@ -1690,8 +1621,6 @@ private fun SearchPage(
                     onAddSlot = onAddSlot, gridColumns = columns,
                     tileIconScale = iconScale, tileSpacingDp = spacingDp, onWidgetGesture = onWidgetGesture
                 )
-                }
-            }
             }
         } else SearchBody(
             state = state,
@@ -1725,7 +1654,12 @@ private fun SearchPage(
 private fun QuickSettingsPage(
     state: SearchUiState,
     onItemClick: (SearchItem) -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    onOpenFloating: (SearchItem) -> Unit = {},
+    onItemLongClick: (SearchItem) -> Unit = {},
+    columns: Int = 4,
+    iconScale: Float = 1f,
+    showLabels: Boolean = true
 ) {
     val settings = state.allItems.filter { it.type == ItemType.SETTING }
     val preferredOrder = listOf(
@@ -1756,46 +1690,82 @@ private fun QuickSettingsPage(
         }
     }
 
-    Column(Modifier.fillMaxSize()) {
-        Text(
-            text = "Ajustes rápidos",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 12.dp)
-        )
-        Text(
-            text = "Accesos directos del sistema",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp)
-        )
+    // Sugerencias del historial: recientes y las apps habituales a esta hora.
+    val cols = columns.coerceIn(3, 6)
+    val recent = state.sections.firstOrNull { it.title == "Recientes" }?.items.orEmpty()
+        .distinctBy { it.id }.take(cols * 2)
+    val hourly = state.sections.firstOrNull { it.title == "Para esta hora" }?.items.orEmpty()
+        .filterNot { candidate -> recent.any { it.id == candidate.id } }
+        .distinctBy { it.id }.take(cols)
 
-        if (state.loading && entries.isEmpty()) {
-            Box(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator()
+    if (state.loading && entries.isEmpty() && recent.isEmpty()) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        return
+    }
+
+    // Cuadrícula de cols × 4 celdas: cada sugerencia ocupa 4 (cols por fila)
+    // y cada ajuste ocupa cols (siempre 4 por fila).
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(cols * 4),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        if (recent.isNotEmpty()) {
+            item(key = "h_recent", span = { GridItemSpan(maxLineSpan) }) { PageSectionTitle("Recientes") }
+            items(recent, key = { "recent:${it.id}" }, span = { GridItemSpan(4) }) { item ->
+                ResultTile(
+                    item = item, pinned = item.id in state.pinnedIds, showLabel = showLabels,
+                    iconScale = iconScale, onClick = { onItemClick(item) },
+                    onDoubleClick = if (ItemLauncher.canOpenFloating(item)) {
+                        { onOpenFloating(item) }
+                    } else null,
+                    onLongClick = { onItemLongClick(item) }
+                )
             }
-        } else {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(4),
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(0.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                items(entries, key = { it.label }) { entry ->
-                    QuickSettingTile(entry) {
-                        if (entry.item != null) {
-                            onItemClick(entry.item)
-                        } else {
-                            onOpenSettings()
-                        }
-                    }
+        }
+        if (hourly.isNotEmpty()) {
+            item(key = "h_hourly", span = { GridItemSpan(maxLineSpan) }) { PageSectionTitle("Para esta hora") }
+            items(hourly, key = { "hourly:${it.id}" }, span = { GridItemSpan(4) }) { item ->
+                ResultTile(
+                    item = item, pinned = item.id in state.pinnedIds, showLabel = showLabels,
+                    iconScale = iconScale, onClick = { onItemClick(item) },
+                    onDoubleClick = if (ItemLauncher.canOpenFloating(item)) {
+                        { onOpenFloating(item) }
+                    } else null,
+                    onLongClick = { onItemLongClick(item) }
+                )
+            }
+        }
+        item(key = "h_settings", span = { GridItemSpan(maxLineSpan) }) {
+            PageSectionTitle("Ajustes rápidos", "Accesos directos del sistema")
+        }
+        items(entries, key = { "setting:${it.label}" }, span = { GridItemSpan(cols) }) { entry ->
+            QuickSettingTile(entry) {
+                if (entry.item != null) {
+                    onItemClick(entry.item)
+                } else {
+                    onOpenSettings()
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun PageSectionTitle(title: String, subtitle: String? = null) {
+    Column(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 2.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        if (subtitle != null) Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -2365,6 +2335,11 @@ private fun PinHint() {
     }
 }
 
+/**
+ * Menú de acciones de un elemento: cabecera con icono y tipo, acciones
+ * principales como botones grandes y el resto agrupado en tarjetas, con la
+ * acción destructiva separada al final.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ItemActionsSheet(
@@ -2382,7 +2357,11 @@ private fun ItemActionsSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val pinned = item.id in pinnedIds
     val canFloat = ItemLauncher.canOpenFloating(item)
+    val canPin = !item.id.startsWith("store:")
+    val isApp = item.type == ItemType.APP && !item.packageName.isNullOrBlank()
+    val isContact = item.type == ItemType.CONTACT && !item.phoneNumber.isNullOrBlank()
     var showGestures by remember(item.id) { mutableStateOf(false) }
+
     fun addContactShortcut(whatsapp: Boolean) {
         val target = ContactShortcuts.target(context, item, whatsapp)
         if (target != null) {
@@ -2391,162 +2370,168 @@ private fun ItemActionsSheet(
         } else Toast.makeText(context, "No se pudo interpretar este número", Toast.LENGTH_SHORT).show()
     }
 
+    fun startOrToast(intent: Intent, error: String) {
+        val opened = runCatching {
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        }.getOrDefault(false)
+        if (!opened) Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+        onDismiss()
+    }
+
+    val typeLabel = when (item.type) {
+        ItemType.APP -> "Aplicación"
+        ItemType.SHORTCUT -> "Atajo"
+        ItemType.SETTING -> "Ajuste del sistema"
+        ItemType.CONTACT -> "Contacto"
+        ItemType.CUSTOM -> "Acceso directo"
+    }
+    val detail = when {
+        item.type == ItemType.CONTACT -> item.phoneNumber.orEmpty()
+        item.subtitle.isNotBlank() -> item.subtitle
+        else -> item.packageName.orEmpty()
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
                 .padding(bottom = 24.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                ItemIcon(item, size = 44.dp)
+            // Cabecera
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .6f)),
+                    contentAlignment = Alignment.Center
+                ) { ItemIcon(item, size = 40.dp) }
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
                         text = item.title,
                         style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    if (item.subtitle.isNotBlank()) {
-                        Text(
-                            text = item.subtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                    Text(
+                        text = listOf(typeLabel, detail).filter { it.isNotBlank() }.joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (pinned) Icon(
+                    Icons.Filled.Star, "Anclado",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            Spacer(Modifier.height(18.dp))
+
+            // Acciones principales
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SheetPrimaryAction(
+                    modifier = Modifier.weight(1f),
+                    icon = {
+                        if (item.type == ItemType.CONTACT) Icon(painterResource(R.drawable.ic_phone), null, Modifier.size(22.dp))
+                        else Icon(Icons.Filled.PlayArrow, null, Modifier.size(22.dp))
+                    },
+                    label = if (item.type == ItemType.CONTACT) "Llamar" else "Abrir",
+                    emphasized = true
+                ) { onOpen(item) }
+                if (canFloat) SheetPrimaryAction(
+                    modifier = Modifier.weight(1f),
+                    icon = { Icon(painterResource(R.drawable.ic_floating_window), null, Modifier.size(22.dp)) },
+                    label = "Flotante"
+                ) { onOpenFloating(item) }
+                if (canPin) SheetPrimaryAction(
+                    modifier = Modifier.weight(1f),
+                    icon = { Icon(if (pinned) Icons.Filled.Star else Icons.Filled.StarBorder, null, Modifier.size(22.dp)) },
+                    label = if (pinned) "Desanclar" else "Anclar"
+                ) { onTogglePin(item) }
+            }
+
+            // Contacto
+            if (isContact) {
+                Spacer(Modifier.height(14.dp))
+                SheetGroup {
+                    SheetAction(
+                        icon = { Icon(painterResource(R.drawable.ic_whatsapp_chat), null) },
+                        label = "Escribir por WhatsApp"
+                    ) { WhatsAppLinks.directChatItem(context, item)?.let(onOpen) }
+                    SheetDivider()
+                    SheetAction(
+                        icon = { Icon(Icons.Filled.Person, null) },
+                        label = "Añadir atajo de WhatsApp",
+                        supporting = "Lo ancla al panel"
+                    ) { addContactShortcut(true) }
+                    SheetDivider()
+                    SheetAction(
+                        icon = { Icon(painterResource(R.drawable.ic_phone), null) },
+                        label = "Añadir atajo de teléfono",
+                        supporting = "Lo ancla al panel"
+                    ) { addContactShortcut(false) }
+                }
+            }
+
+            // Opciones
+            Spacer(Modifier.height(14.dp))
+            SheetGroup {
+                SheetAction(
+                    icon = { Icon(Icons.Filled.Gesture, null) },
+                    label = "Gestos",
+                    supporting = "Widget al deslizar hacia arriba"
+                ) { showGestures = true }
+                if (isApp) {
+                    SheetDivider()
+                    SheetAction(
+                        icon = { Icon(Icons.Filled.Info, null) },
+                        label = "Información de la app",
+                        supporting = "Permisos, almacenamiento y notificaciones"
+                    ) {
+                        startOrToast(
+                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${item.packageName}")),
+                            "No se pudo abrir la información de la app"
                         )
                     }
                 }
             }
 
-            Spacer(Modifier.height(6.dp))
-            HorizontalDivider(Modifier.padding(horizontal = 24.dp))
-            Spacer(Modifier.height(4.dp))
-
-            SheetAction(icon = { Icon(Icons.Filled.Tune, null) }, label = "Gestos") {
-                showGestures = true
-            }
-
-            SheetAction(
-                icon = {
-                    Icon(Icons.Filled.PlayArrow, contentDescription = null)
-                },
-                label = if (item.type == ItemType.CONTACT) "Llamar al contacto" else "Abrir"
-            ) {
-                onOpen(item)
-            }
-
-            if (item.type == ItemType.CONTACT && !item.phoneNumber.isNullOrBlank()) {
-                SheetAction(
-                    icon = { Icon(painterResource(R.drawable.ic_whatsapp_chat), null) },
-                    label = "Escribir por WhatsApp"
-                ) {
-                    WhatsAppLinks.directChatItem(context, item)?.let(onOpen)
-                }
-                SheetAction(
-                    icon = { Icon(Icons.Filled.Person, contentDescription = null) },
-                    label = "Añadir atajo de WhatsApp"
-                ) { addContactShortcut(true) }
-                SheetAction(
-                    icon = { Icon(painterResource(R.drawable.ic_phone), null) },
-                    label = "Añadir atajo de teléfono"
-                ) { addContactShortcut(false) }
-            }
-
-            if (canFloat) {
-                SheetAction(
-                    icon = {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_floating_window),
-                            contentDescription = null
+            // Acción destructiva, separada del resto
+            if (isApp) {
+                Spacer(Modifier.height(14.dp))
+                SheetGroup {
+                    SheetAction(
+                        icon = { Icon(Icons.Filled.Delete, null) },
+                        label = "Desinstalar",
+                        destructive = true
+                    ) {
+                        startOrToast(
+                            Intent(Intent.ACTION_DELETE, Uri.parse("package:${item.packageName}")),
+                            "Esta aplicación no se puede desinstalar"
                         )
-                    },
-                    label = "Abrir en ventana flotante"
-                ) {
-                    onOpenFloating(item)
-                }
-            }
-
-            if (item.type == ItemType.APP && !item.packageName.isNullOrBlank()) {
-                SheetAction(
-                    icon = { Icon(Icons.Filled.Info, contentDescription = null) },
-                    label = "Información de la app"
-                ) {
-                    val opened = runCatching {
-                        context.startActivity(
-                            Intent(
-                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                Uri.parse("package:${item.packageName}")
-                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
-                        true
-                    }.getOrDefault(false)
-                    if (!opened) Toast.makeText(
-                        context, "No se pudo abrir la información de la app", Toast.LENGTH_SHORT
-                    ).show()
-                    onDismiss()
-                }
-
-                SheetAction(
-                    icon = {
-                        Icon(
-                            Icons.Filled.Delete,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error
-                        )
-                    },
-                    label = "Desinstalar"
-                ) {
-                    val opened = runCatching {
-                        context.startActivity(
-                            Intent(
-                                Intent.ACTION_DELETE,
-                                Uri.parse("package:${item.packageName}")
-                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
-                        true
-                    }.getOrDefault(false)
-                    if (!opened) Toast.makeText(
-                        context, "Esta aplicación no se puede desinstalar", Toast.LENGTH_SHORT
-                    ).show()
-                    onDismiss()
-                }
-            }
-
-            if (!item.id.startsWith("store:")) {
-                SheetAction(
-                    icon = {
-                        Icon(
-                            imageVector = Icons.Filled.Star,
-                            contentDescription = null,
-                            tint = if (pinned) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            }
-                        )
-                    },
-                    label = if (pinned) "Quitar de ancladas" else "Anclar al panel"
-                ) {
-                    onTogglePin(item)
+                    }
                 }
             }
 
             if (canFloat) {
                 Text(
                     text = "La ventana flotante depende del fabricante y de su soporte multitarea.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .8f),
+                    modifier = Modifier.padding(horizontal = 4.dp).padding(top = 14.dp)
                 )
             }
         }
@@ -2574,28 +2559,103 @@ private fun ItemActionsSheet(
 }
 
 @Composable
+private fun SheetPrimaryAction(
+    modifier: Modifier,
+    icon: @Composable () -> Unit,
+    label: String,
+    emphasized: Boolean = false,
+    onClick: () -> Unit
+) {
+    val container = if (emphasized) MaterialTheme.colorScheme.primary
+    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .55f)
+    val content = if (emphasized) MaterialTheme.colorScheme.onPrimary
+    else MaterialTheme.colorScheme.onSurface
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(container)
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides content) {
+            icon()
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun SheetGroup(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .4f)),
+        content = content
+    )
+}
+
+@Composable
+private fun SheetDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(start = 62.dp),
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .25f)
+    )
+}
+
+@Composable
 private fun SheetAction(
     icon: @Composable () -> Unit,
     label: String,
+    supporting: String? = null,
+    destructive: Boolean = false,
     onClick: () -> Unit
 ) {
+    val accent = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 24.dp, vertical = 14.dp),
+            .padding(horizontal = 14.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
-            modifier = Modifier.size(24.dp),
+            modifier = Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(accent.copy(alpha = .14f)),
             contentAlignment = Alignment.Center
         ) {
-            icon()
+            CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides accent) {
+                Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) { icon() }
+            }
         }
-        Spacer(Modifier.width(18.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyLarge
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                color = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+            )
+            if (supporting != null) Text(
+                text = supporting,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (!destructive) Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight, null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .6f),
+            modifier = Modifier.size(20.dp)
         )
     }
 }
