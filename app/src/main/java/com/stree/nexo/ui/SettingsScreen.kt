@@ -300,7 +300,7 @@ private fun PanelAppearanceSettings() {
             onCheckedChange = { animateIcons = it; Prefs.setAnimatePanelIcons(context, it) }
         )
         if (style == PanelStyle.GLASS) Text(
-            "Cristal clásico, algo más claro, con transparencia y reflejos suaves. Sin desenfoque ni ventanas especiales.",
+            "Cristal esmerilado oscuro: vidrio ahumado translúcido con reflejos suaves y borde biselado.",
             style = MaterialTheme.typography.bodySmall
         )
         Text(

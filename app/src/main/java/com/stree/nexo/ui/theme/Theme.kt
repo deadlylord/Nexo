@@ -117,9 +117,9 @@ fun PanelTheme(style: PanelStyle, content: @Composable () -> Unit) {
         PanelStyle.NEXO -> MaterialTheme.colorScheme
         PanelStyle.GLASS -> darkColorScheme(
             primary = Color(0xFFB5E5FF), onPrimary = Color(0xFF102A39),
-            surface = Color(0xFF192A3A), surfaceVariant = Color(0xFF30475D),
-            background = Color(0xFF0E1925), onSurface = Color.White,
-            onSurfaceVariant = Color(0xFFD3E3F0), outlineVariant = Color(0xFF96B2C9)
+            surface = Color(0xFF0F1923), surfaceVariant = Color(0xFF263644),
+            background = Color(0xFF080F16), onSurface = Color.White,
+            onSurfaceVariant = Color(0xFFC9D8E4), outlineVariant = Color(0xFF8AA3B8)
         )
     }
     MaterialTheme(colorScheme = colors, content = content)

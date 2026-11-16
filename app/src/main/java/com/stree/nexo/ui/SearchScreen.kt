@@ -75,6 +75,7 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.CompareArrows
 import androidx.compose.material.icons.filled.Accessibility
@@ -421,7 +422,8 @@ fun SearchBody(
     onWidgetGesture: ((SearchItem) -> Unit)? = null,
     onMovePinnedToSlot: ((String, Int) -> Unit)? = null,
     centerItems: Boolean = false,
-    bottomContentPaddingDp: Int = 20
+    bottomContentPaddingDp: Int = 20,
+    listMode: Boolean = false
 ) {
     when {
         state.loading && state.allItems.isEmpty() -> {
@@ -468,6 +470,7 @@ fun SearchBody(
                     listOf(ResultSection("", cells + suggestions.toList()))
                 } else if (unified.isEmpty()) emptyList() else listOf(ResultSection("", unified))
             }
+            val bestId = if (listMode) state.firstMatch()?.id else null
             var draggedId by remember { mutableStateOf<String?>(null) }
             var dragOffset by remember { mutableStateOf(Offset.Zero) }
             var dropTargetId by remember { mutableStateOf<String?>(null) }
@@ -544,8 +547,8 @@ fun SearchBody(
                         items = section.items,
                         key = { "result:${section.title}:${it.id}" },
                         span = { item ->
-                            if (item.showsAsTile() ||
-                                (item.type == ItemType.CONTACT && item.id in state.pinnedIds)
+                            if (!listMode && (item.showsAsTile() ||
+                                (item.type == ItemType.CONTACT && item.id in state.pinnedIds))
                             ) {
                                 GridItemSpan(1)
                             } else {
@@ -701,7 +704,7 @@ fun SearchBody(
                                 onOpenWhatsApp = onItemClick,
                                 onActions = { onItemLongClick(item) }
                             )
-                        } else if (pinnedContact || item.showsAsTile()) {
+                        } else if (!listMode && (pinnedContact || item.showsAsTile())) {
                             ResultTile(
                                 item = item,
                                 pinned = item.id in state.pinnedIds,
@@ -722,6 +725,8 @@ fun SearchBody(
                             ResultRow(
                                 item = item,
                                 pinned = item.id in state.pinnedIds,
+                                compact = listMode,
+                                best = listMode && item.id == bestId,
                                 onClick = open,
                                 onDoubleClick = if (ItemLauncher.canOpenFloating(item)
                                 ) {
@@ -908,13 +913,20 @@ fun ResultRow(
     pinned: Boolean,
     onClick: () -> Unit,
     onDoubleClick: (() -> Unit)?,
-    onLongClick: (() -> Unit)?
+    onLongClick: (() -> Unit)?,
+    compact: Boolean = false,
+    best: Boolean = false
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(if (compact) Modifier.padding(horizontal = 2.dp, vertical = 1.dp) else Modifier)
+            .clip(RoundedCornerShape(if (compact) 16.dp else 0.dp))
+            .background(
+                if (best) MaterialTheme.colorScheme.primary.copy(alpha = .16f) else Color.Transparent
+            )
             .combinedClickable(onClick = onClick, onDoubleClick = onDoubleClick, onLongClick = onLongClick)
-            .padding(horizontal = 18.dp, vertical = 9.dp),
+            .padding(horizontal = if (compact) 10.dp else 18.dp, vertical = if (compact) 7.dp else 9.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         ItemIcon(item)
@@ -940,7 +952,14 @@ fun ResultRow(
             }
         }
 
-        if (pinned) {
+        if (best && !pinned) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "Mejor coincidencia (Enter)",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
+        } else if (pinned) {
             Icon(
                 imageVector = Icons.Filled.Star,
                 contentDescription = "Fijado",
@@ -1308,7 +1327,8 @@ fun SearchPanel(
                             onRequestContacts = onRequestContacts, modifier = Modifier.weight(1f),
                             showSectionHeaders = false, showShortcutsNote = false,
                             showTileLabels = panelShowLabels, gridColumns = panelColumns,
-                            resultSide = side, bottomAnchored = false, tileIconScale = panelIconScale
+                            resultSide = side, bottomAnchored = false, tileIconScale = panelIconScale,
+                            listMode = true
                         ) else HorizontalPager(
                             state = pagerState,
                             modifier = Modifier.weight(1f),
