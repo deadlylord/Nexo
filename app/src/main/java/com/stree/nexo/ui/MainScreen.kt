@@ -68,8 +68,12 @@ fun MainScreen(
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            NavigationBar {
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surface,
+                tonalElevation = 0.dp
+            ) {
                 MainTab.entries.forEach { item ->
                     NavigationBarItem(
                         selected = tab == item,
@@ -84,7 +88,12 @@ fun MainScreen(
                                 contentDescription = null
                             )
                         },
-                        label = { Text(item.label) }
+                        label = {
+                            Text(
+                                text = item.label,
+                                fontWeight = if (tab == item) FontWeight.SemiBold else FontWeight.Normal
+                            )
+                        }
                     )
                 }
             }
@@ -111,7 +120,7 @@ fun MainScreen(
                                 .padding(horizontal = 20.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column {
+                            Column(Modifier.weight(1f)) {
                                 Text(
                                     text = "Nexo",
                                     style = MaterialTheme.typography.headlineSmall,

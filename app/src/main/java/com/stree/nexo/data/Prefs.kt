@@ -1,11 +1,17 @@
 package com.stree.nexo.data
 
 import android.content.Context
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import org.json.JSONArray
 import org.json.JSONObject
 
 object Prefs {
     private const val FILE = "nexo_prefs"
+
+    var themeRevision by mutableIntStateOf(0)
+        private set
 
     private fun prefs(context: Context) =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -36,6 +42,15 @@ object Prefs {
 
     fun setPanelStyle(context: Context, style: PanelStyle) {
         prefs(context).edit().putString("panel_style", style.name).apply()
+        themeRevision++
+    }
+
+    fun appDynamicColor(context: Context): Boolean =
+        prefs(context).getBoolean("app_dynamic_color", false)
+
+    fun setAppDynamicColor(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("app_dynamic_color", enabled).apply()
+        themeRevision++
     }
 
     fun panelPageOrder(context: Context): List<PanelPage> {
@@ -97,6 +112,7 @@ object Prefs {
 
     fun setPanelLightBackground(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean("panel_light_background", enabled).apply()
+        themeRevision++
     }
 
     fun activatorStyle(context: Context): ActivatorStyle = runCatching {

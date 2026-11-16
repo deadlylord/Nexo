@@ -4,61 +4,43 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.stree.nexo.data.PanelStyle
 import com.stree.nexo.data.Prefs
+import com.stree.nexo.ui.theme.visualSpec
 
 /**
- * Panel frame. The Cristal style imitates dark frosted glass: a deep smoky
- * translucent base, a soft light sheen from the top corner and a thin
- * bevelled edge, keeping contrast over bright wallpapers.
+ * Marco del panel lateral: cada tema aplica su propio acabado multicapa (base
+ * translúcida, velo de luz direccional y borde biselado o luminoso).
  */
 @Composable
-internal fun PanelSurface(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    val glass = Prefs.panelStyle(LocalContext.current) == PanelStyle.GLASS
+internal fun PanelSurface(
+    modifier: Modifier = Modifier,
+    styleOverride: PanelStyle? = null,
+    lightOverride: Boolean? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val context = LocalContext.current
+    val style = styleOverride ?: Prefs.panelStyle(context)
+    val light = lightOverride ?: Prefs.panelLightBackground(context)
+    val spec = style.visualSpec(light = light)
     val shape = RoundedCornerShape(28.dp)
-    val edge = Brush.linearGradient(
-        listOf(
-            Color.White.copy(alpha = .38f),
-            Color.White.copy(alpha = .08f),
-            Color.White.copy(alpha = .03f),
-            Color.White.copy(alpha = .20f)
-        )
-    )
 
     Surface(
-        modifier = modifier.then(
-            if (glass) Modifier.border(1.dp, edge, shape)
-            else Modifier
-        ),
+        modifier = modifier.border(spec.borderWidthDp.dp, spec.borderBrush, shape),
         shape = shape,
-        color = if (glass) Color(0xFF0A121A).copy(alpha = 0.80f)
-        else MaterialTheme.colorScheme.surface.copy(alpha = .94f),
-        border = if (glass) null else androidx.compose.foundation.BorderStroke(
-            1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .35f)
-        ),
+        color = spec.surface.copy(alpha = spec.panelAlpha),
         tonalElevation = 0.dp,
-        shadowElevation = if (glass) 24.dp else 20.dp
+        shadowElevation = if (style == PanelStyle.GLASS || style == PanelStyle.NEON) 26.dp else 22.dp
     ) {
         Column(
-            Modifier.fillMaxSize().then(
-                if (glass) Modifier.background(
-                    Brush.linearGradient(
-                        listOf(
-                            Color.White.copy(alpha = .10f),
-                            Color.White.copy(alpha = .02f),
-                            Color.Black.copy(alpha = .14f)
-                        )
-                    )
-                ) else Modifier
-            ),
+            Modifier
+                .fillMaxSize()
+                .background(spec.sheenBrush),
             content = content
         )
     }

@@ -20,13 +20,16 @@ enum class PanelPage(val label: String) {
     MAIN("Principal"), SETTINGS("Ajustes rápidos"), APPS("Aplicaciones"), CONTACTS("Contactos"), WIDGETS("Widgets")
 }
 
-enum class PanelStyle(val label: String) {
-    NEXO("Nexo"),
-    MINT("Menta"),
-    OCEAN("Océano"),
-    AMBER("Ámbar"),
-    MONO("Monocromo"),
-    GLASS("Cristal")
+enum class PanelStyle(val label: String, val subtitle: String) {
+    NEXO("Nexo", "Índigo cósmico y destellos iridiscentes"),
+    GLASS("Cristal", "Vidrio esmerilado oscuro con bisel especular"),
+    MINT("Aurora", "Esmeralda nocturno y turquesa boreal"),
+    OCEAN("Océano", "Abismo zafiro con reflejos celestes"),
+    AMBER("Ámbar", "Obsidiana cálida con bronce y oro"),
+    NEON("Cyberpunk", "Violeta eléctrico y láser cian"),
+    SUNSET("Atardecer", "Crepúsculo carmesí, coral y violeta"),
+    ROSE("Cuarzo", "Ciruela ahumado y rosa cuarzo"),
+    MONO("OLED Puro", "Negro absoluto y titanio de alto contraste")
 }
 
 enum class ActivatorStyle(val label: String) {
