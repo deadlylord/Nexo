@@ -34,6 +34,7 @@ internal fun PanelSurface(
         modifier = modifier.border(spec.borderWidthDp.dp, spec.borderBrush, shape),
         shape = shape,
         color = spec.surface.copy(alpha = spec.panelAlpha),
+        contentColor = spec.onSurface,
         tonalElevation = 0.dp,
         shadowElevation = if (style == PanelStyle.GLASS || style == PanelStyle.NEON) 26.dp else 22.dp
     ) {

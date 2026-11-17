@@ -3,12 +3,14 @@ package com.stree.nexo.ui.theme
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -121,13 +123,13 @@ fun PanelStyle.visualSpec(light: Boolean = false): ThemeVisualSpec {
             onPrimary = Color(0xFF0D2533),
             secondary = Color(0xFF93C5FD),
             tertiary = Color(0xFFE0F2FE),
-            background = Color(0xFF080F16),
-            surface = Color(0xFF0F1923),
-            surfaceVariant = Color(0xFF233342),
+            background = Color(0xFF060C12),
+            surface = Color(0xFF0A1118),
+            surfaceVariant = Color(0xFF1E2D3B),
             onSurface = Color.White,
-            onSurfaceVariant = Color(0xFFC9D8E4),
+            onSurfaceVariant = Color(0xFFD6E4F0),
             outlineVariant = Color(0xFF8AA3B8),
-            panelAlpha = 0.78f,
+            panelAlpha = 0.86f,
             borderWidthDp = 1.15f,
             borderColors = listOf(
                 Color.White.copy(alpha = 0.42f),
@@ -136,11 +138,11 @@ fun PanelStyle.visualSpec(light: Boolean = false): ThemeVisualSpec {
                 Color(0xFFB5E5FF).copy(alpha = 0.24f)
             ),
             sheenColors = listOf(
-                Color.White.copy(alpha = 0.12f),
+                Color.White.copy(alpha = 0.10f),
                 Color.White.copy(alpha = 0.02f),
-                Color.Black.copy(alpha = 0.18f)
+                Color.Black.copy(alpha = 0.22f)
             ),
-            swatchColors = listOf(Color(0xFF0F1923), Color(0xFFB5E5FF), Color(0xFF64748B))
+            swatchColors = listOf(Color(0xFF0A1118), Color(0xFFB5E5FF), Color(0xFF64748B))
         )
 
         PanelStyle.MINT -> ThemeVisualSpec(
@@ -396,10 +398,9 @@ fun NexoTheme(
         else -> style.visualSpec(light = lightPref).toColorScheme(light = lightPref)
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        content = content
-    )
+    MaterialTheme(colorScheme = colorScheme) {
+        CompositionLocalProvider(LocalContentColor provides colorScheme.onSurface, content = content)
+    }
 }
 
 @Composable
@@ -417,8 +418,8 @@ fun PanelTheme(
     val revision = Prefs.themeRevision
     val light = lightOverride ?: Prefs.panelLightBackground(context)
     val spec = style.visualSpec(light = light)
-    MaterialTheme(
-        colorScheme = spec.toColorScheme(light = light),
-        content = content
-    )
+    val scheme = spec.toColorScheme(light = light)
+    MaterialTheme(colorScheme = scheme) {
+        CompositionLocalProvider(LocalContentColor provides scheme.onSurface, content = content)
+    }
 }

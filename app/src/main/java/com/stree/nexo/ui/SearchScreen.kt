@@ -940,6 +940,7 @@ fun ResultRow(
             Text(
                 text = item.title,
                 style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = if (item.type == ItemType.APP) FontWeight.Medium else FontWeight.Normal,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -1657,8 +1658,9 @@ private fun QuickSettingsPage(
     onOpenSettings: () -> Unit,
     onOpenFloating: (SearchItem) -> Unit = {},
     onItemLongClick: (SearchItem) -> Unit = {},
-    columns: Int = 4,
+    columns: Int = 5,
     iconScale: Float = 1f,
+    spacingDp: Int = 0,
     showLabels: Boolean = true
 ) {
     val settings = state.allItems.filter { it.type == ItemType.SETTING }
@@ -1690,46 +1692,39 @@ private fun QuickSettingsPage(
         }
     }
 
-    // Sugerencias del historial: recientes y las apps habituales a esta hora.
+    // Recientes, frecuentes y para esta hora juntos, compactados en una sola cuadrícula
+    // con el mismo número de columnas, escala y espaciado del tema del panel.
     val cols = columns.coerceIn(3, 6)
     val recent = state.sections.firstOrNull { it.title == "Recientes" }?.items.orEmpty()
-        .distinctBy { it.id }.take(cols * 2)
+    val frequent = state.sections.firstOrNull { it.title == "Frecuentes" }?.items.orEmpty()
     val hourly = state.sections.firstOrNull { it.title == "Para esta hora" }?.items.orEmpty()
-        .filterNot { candidate -> recent.any { it.id == candidate.id } }
-        .distinctBy { it.id }.take(cols)
+    val suggestions = (recent + frequent + hourly)
+        .distinctBy { it.id }
+        .take(cols * 3)
 
-    if (state.loading && entries.isEmpty() && recent.isEmpty()) {
+    if (state.loading && entries.isEmpty() && suggestions.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         return
     }
 
-    // Cuadrícula de cols × 4 celdas: cada sugerencia ocupa 4 (cols por fila)
-    // y cada ajuste ocupa cols (siempre 4 por fila).
     LazyVerticalGrid(
-        columns = GridCells.Fixed(cols * 4),
+        columns = GridCells.Fixed(cols),
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(spacingDp.dp),
+        verticalArrangement = Arrangement.spacedBy(spacingDp.dp)
     ) {
-        if (recent.isNotEmpty()) {
-            item(key = "h_recent", span = { GridItemSpan(maxLineSpan) }) { PageSectionTitle("Recientes") }
-            items(recent, key = { "recent:${it.id}" }, span = { GridItemSpan(4) }) { item ->
-                ResultTile(
-                    item = item, pinned = item.id in state.pinnedIds, showLabel = showLabels,
-                    iconScale = iconScale, onClick = { onItemClick(item) },
-                    onDoubleClick = if (ItemLauncher.canOpenFloating(item)) {
-                        { onOpenFloating(item) }
-                    } else null,
-                    onLongClick = { onItemLongClick(item) }
-                )
+        if (suggestions.isNotEmpty()) {
+            item(key = "h_suggestions", span = { GridItemSpan(maxLineSpan) }) {
+                CompactGridTitle("Recientes y frecuentes")
             }
-        }
-        if (hourly.isNotEmpty()) {
-            item(key = "h_hourly", span = { GridItemSpan(maxLineSpan) }) { PageSectionTitle("Para esta hora") }
-            items(hourly, key = { "hourly:${it.id}" }, span = { GridItemSpan(4) }) { item ->
+            items(suggestions, key = { "sug:${it.id}" }) { item ->
                 ResultTile(
-                    item = item, pinned = item.id in state.pinnedIds, showLabel = showLabels,
-                    iconScale = iconScale, onClick = { onItemClick(item) },
+                    item = item,
+                    pinned = item.id in state.pinnedIds,
+                    showLabel = showLabels,
+                    iconScale = iconScale,
+                    onClick = { onItemClick(item) },
                     onDoubleClick = if (ItemLauncher.canOpenFloating(item)) {
                         { onOpenFloating(item) }
                     } else null,
@@ -1738,10 +1733,14 @@ private fun QuickSettingsPage(
             }
         }
         item(key = "h_settings", span = { GridItemSpan(maxLineSpan) }) {
-            PageSectionTitle("Ajustes rápidos", "Accesos directos del sistema")
+            CompactGridTitle("Ajustes rápidos", topPadding = if (suggestions.isNotEmpty()) 6 else 2)
         }
-        items(entries, key = { "setting:${it.label}" }, span = { GridItemSpan(cols) }) { entry ->
-            QuickSettingTile(entry) {
+        items(entries, key = { "setting:${it.label}" }) { entry ->
+            QuickSettingTile(
+                entry = entry,
+                showLabel = showLabels,
+                iconScale = iconScale
+            ) {
                 if (entry.item != null) {
                     onItemClick(entry.item)
                 } else {
@@ -1753,55 +1752,66 @@ private fun QuickSettingsPage(
 }
 
 @Composable
-private fun PageSectionTitle(title: String, subtitle: String? = null) {
-    Column(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 2.dp)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        if (subtitle != null) Text(
-            text = subtitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
+private fun CompactGridTitle(title: String, topPadding: Int = 2) {
+    Text(
+        text = title.uppercase(),
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = 0.7.sp,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 6.dp, end = 6.dp, top = topPadding.dp, bottom = 2.dp)
+    )
 }
 
 @Composable
-private fun QuickSettingTile(entry: QuickEntry, onClick: () -> Unit) {
+private fun QuickSettingTile(
+    entry: QuickEntry,
+    showLabel: Boolean = true,
+    iconScale: Float = 1f,
+    onClick: () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .heightIn(min = if (showLabel) 66.dp else 48.dp)
+            .clip(RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
-            .padding(vertical = 5.dp),
+            .padding(horizontal = 1.dp, vertical = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(
-            modifier = Modifier
-                .size(46.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = entry.icon,
-                contentDescription = entry.label,
-                tint = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier.size(24.dp)
+        BoxWithConstraints {
+            val scale = iconScale.coerceIn(0.75f, 1.35f)
+            val base = (maxWidth * 0.58f).coerceIn(26.dp, 50.dp)
+            val iconSize = (base * scale).coerceAtMost((maxWidth * 0.80f).coerceAtLeast(22.dp))
+            Box(
+                modifier = Modifier
+                    .size(iconSize)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = entry.icon,
+                    contentDescription = entry.label,
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size((iconSize * 0.52f).coerceIn(14.dp, 26.dp))
+                )
+            }
+        }
+        if (showLabel) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = entry.label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                lineHeight = 13.sp,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
             )
         }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = entry.label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center
-        )
     }
 }
 
