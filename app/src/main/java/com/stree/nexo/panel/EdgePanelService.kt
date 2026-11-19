@@ -163,10 +163,11 @@ class EdgePanelService : Service() {
             setOnTouchListener { _, event -> handleTouch(event) }
         }
 
-        // Permite deslizar desde el borde sin que el gesto "atrás" del sistema se lo coma.
+        // No excluimos el gesto del sistema para que el gesto nativo "Atrás"
+        // de Android funcione directamente sobre la barra sin interrupciones.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             runCatching {
-                view.systemGestureExclusionRects = listOf(Rect(0, 0, width, height))
+                view.systemGestureExclusionRects = emptyList()
             }
         }
 
@@ -233,6 +234,9 @@ class EdgePanelService : Service() {
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 gestureHandler.removeCallbacks(holdAction)
+                if (event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                    gestureHandler.removeCallbacks(openPanelRunnable)
+                }
                 pullArmed = false
                 if (event.actionMasked == MotionEvent.ACTION_UP && !rejectedGesture && !pullTriggered) {
                     gestureHandler.postDelayed(openPanelRunnable, TAP_OPEN_DELAY_MS)
@@ -240,8 +244,13 @@ class EdgePanelService : Service() {
                 if (event.actionMasked == MotionEvent.ACTION_UP && rejectedGesture && !pullTriggered) {
                     val dx = event.rawX - downRawX
                     val dy = event.rawY - downRawY
+                    val inward = if (Prefs.panelSide(this) == PanelSide.START) dx else -dx
                     if (abs(dy) >= dp(32) && abs(dy) > abs(dx) * 1.5f) {
                         openControls(if (dy < 0) "brightness" else "volume")
+                    } else if (inward >= dp(36) && abs(dx) > abs(dy) * 1.5f) {
+                        // Respaldo: si la barra está separada del borde físico y Android no
+                        // interceptó el gesto Atrás, delegamos en Accesibilidad si está activa.
+                        SplitScreenService.performBack()
                     }
                 }
                 resetHandleVisual()

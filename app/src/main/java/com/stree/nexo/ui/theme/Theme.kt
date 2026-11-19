@@ -48,6 +48,40 @@ data class ThemeVisualSpec(
 }
 
 fun PanelStyle.visualSpec(light: Boolean = false): ThemeVisualSpec {
+    // Cristal es siempre vidrio oscuro esmerilado con texto blanco nítido,
+    // incluso con Modo claro activo, para que las etiquetas nunca pierdan contraste.
+    if (this == PanelStyle.GLASS) {
+        val baseSurface = if (light) Color(0xFF141E28) else Color(0xFF0A1118)
+        val baseBg = if (light) Color(0xFF0D151D) else Color(0xFF060C12)
+        return ThemeVisualSpec(
+            style = this,
+            primary = Color(0xFFB5E5FF),
+            onPrimary = Color(0xFF0D2533),
+            secondary = Color(0xFF93C5FD),
+            tertiary = Color(0xFFE0F2FE),
+            background = baseBg,
+            surface = baseSurface,
+            surfaceVariant = Color(0xFF20303F),
+            onSurface = Color.White,
+            onSurfaceVariant = Color(0xFFE2EEF8),
+            outlineVariant = Color(0xFF8AA3B8),
+            panelAlpha = 0.88f,
+            borderWidthDp = 1.15f,
+            borderColors = listOf(
+                Color.White.copy(alpha = 0.44f),
+                Color.White.copy(alpha = 0.12f),
+                Color.White.copy(alpha = 0.04f),
+                Color(0xFFB5E5FF).copy(alpha = 0.28f)
+            ),
+            sheenColors = listOf(
+                Color.White.copy(alpha = 0.11f),
+                Color.White.copy(alpha = 0.02f),
+                Color.Black.copy(alpha = 0.24f)
+            ),
+            swatchColors = listOf(baseSurface, Color(0xFFB5E5FF), Color(0xFF64748B))
+        )
+    }
+
     if (light) {
         val (primary, secondary, tertiary) = when (this) {
             PanelStyle.NEXO -> Triple(Color(0xFF4F46E5), Color(0xFF7C3AED), Color(0xFF06B6D4))
@@ -72,7 +106,7 @@ fun PanelStyle.visualSpec(light: Boolean = false): ThemeVisualSpec {
             onSurface = Color(0xFF141622),
             onSurfaceVariant = Color(0xFF4B5063),
             outlineVariant = primary.copy(alpha = 0.28f),
-            panelAlpha = if (this == PanelStyle.GLASS) 0.82f else 0.95f,
+            panelAlpha = 0.95f,
             borderWidthDp = 1.2f,
             borderColors = listOf(
                 Color.White.copy(alpha = 0.85f),
@@ -395,7 +429,10 @@ fun NexoTheme(
         dynamic && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             if (lightPref) dynamicLightColorScheme(context) else dynamicDarkColorScheme(context)
         }
-        else -> style.visualSpec(light = lightPref).toColorScheme(light = lightPref)
+        else -> {
+            val useLight = lightPref && style != PanelStyle.GLASS
+            style.visualSpec(light = lightPref).toColorScheme(light = useLight)
+        }
     }
 
     MaterialTheme(colorScheme = colorScheme) {
@@ -417,8 +454,9 @@ fun PanelTheme(
     @Suppress("UNUSED_VARIABLE")
     val revision = Prefs.themeRevision
     val light = lightOverride ?: Prefs.panelLightBackground(context)
+    val useLight = light && style != PanelStyle.GLASS
     val spec = style.visualSpec(light = light)
-    val scheme = spec.toColorScheme(light = light)
+    val scheme = spec.toColorScheme(light = useLight)
     MaterialTheme(colorScheme = scheme) {
         CompositionLocalProvider(LocalContentColor provides scheme.onSurface, content = content)
     }

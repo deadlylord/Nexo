@@ -1879,7 +1879,7 @@ private fun GestureLegendGrid() {
         Triple(Icons.Filled.Brightness6, "Deslizar arriba", "Control rápido de brillo"),
         Triple(Icons.Filled.SwipeVertical, "Deslizar abajo", "Control de volumen"),
         Triple(Icons.Filled.Gesture, "Jalar y sostener", "Vuelve a la última app"),
-        Triple(Icons.Filled.Layers, "Arrastre horizontal", "Respeta el gesto Atrás")
+        Triple(Icons.Filled.Layers, "Deslizar desde borde", "Gesto Atrás nativo sobre la barra")
     )
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         gestures.chunked(2).forEach { pair ->

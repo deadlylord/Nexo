@@ -145,6 +145,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
@@ -994,8 +995,7 @@ private fun ResultTile(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = if (showLabel) 66.dp else 48.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(14.dp))
             .combinedClickable(onClick = onClick, onDoubleClick = onDoubleClick, onLongClick = onLongClick)
             .padding(horizontal = 1.dp, vertical = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -1046,10 +1046,15 @@ private fun ResultTile(
 
         if (showLabel) {
             Spacer(Modifier.height(2.dp))
+            val labelColor = MaterialTheme.colorScheme.onSurface
+            val isLightText = (labelColor.red + labelColor.green + labelColor.blue) > 1.5f
             Text(
                 text = item.title,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    shadow = if (isLightText) Shadow(Color.Black.copy(alpha = 0.7f), Offset(0f, 1f), 4f) else null
+                ),
+                fontWeight = FontWeight.Medium,
+                color = labelColor,
                 textAlign = TextAlign.Center,
                 maxLines = 1,
                 lineHeight = 13.sp,
@@ -2149,10 +2154,15 @@ private fun AppGridTile(
     ) {
         ItemIcon(app, size = 40.dp)
         Spacer(Modifier.height(4.dp))
+        val labelColor = MaterialTheme.colorScheme.onSurface
+        val isLightText = (labelColor.red + labelColor.green + labelColor.blue) > 1.5f
         Text(
             text = app.title,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.labelSmall.copy(
+                shadow = if (isLightText) Shadow(Color.Black.copy(alpha = 0.7f), Offset(0f, 1f), 4f) else null
+            ),
+            fontWeight = FontWeight.Medium,
+            color = labelColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,

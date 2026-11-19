@@ -202,6 +202,9 @@ class SplitScreenService : AccessibilityService() {
         private const val SECOND_DELAY_MS = 700L
         private var instance: SplitScreenService? = null
 
+        fun performBack(): Boolean =
+            runCatching { instance?.performGlobalAction(GLOBAL_ACTION_BACK) == true }.getOrDefault(false)
+
         fun launch(context: Context, firstPackage: String, secondPackage: String): Boolean {
             val first = context.packageManager.getLaunchIntentForPackage(firstPackage) ?: return false
             val second = context.packageManager.getLaunchIntentForPackage(secondPackage) ?: return false
