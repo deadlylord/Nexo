@@ -45,11 +45,12 @@ jobs:
           ls -lh dist
 
       - name: Upload artifact
+        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v7
         with:
           name: Nexo-debug-apk
           path: dist/Nexo-debug.apk
-          retention-days: 60
+          retention-days: 1
 
       - name: Publish release APK
         if: github.event_name != 'pull_request'
