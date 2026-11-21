@@ -105,6 +105,13 @@ object Prefs {
         themeRevision++
     }
 
+    fun panelInfiniteScroll(context: Context): Boolean =
+        prefs(context).getBoolean("panel_infinite_scroll", true)
+
+    fun setPanelInfiniteScroll(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("panel_infinite_scroll", enabled).apply()
+    }
+
     fun panelHeight(context: Context): Float =
         prefs(context).getFloat("panel_height", 0.52f).coerceIn(0.30f, 0.85f)
 

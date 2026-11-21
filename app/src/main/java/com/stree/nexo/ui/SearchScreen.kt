@@ -442,7 +442,9 @@ fun SearchBody(
     centerItems: Boolean = false,
     bottomContentPaddingDp: Int = 20,
     listMode: Boolean = false,
-    wrapHeight: Boolean = false
+    wrapHeight: Boolean = false,
+    minFillSlots: Int = 0,
+    onItemLongClickAtSlot: ((SearchItem, Int?) -> Unit)? = null
 ) {
     when {
         state.loading && state.allItems.isEmpty() -> {
@@ -480,15 +482,35 @@ fun SearchBody(
                 val unified = state.sections.flatMap { it.items }.distinctBy { it.id }
                 if (onAddSlot != null && state.query.isBlank()) {
                     val pinned = unified.filter { it.id in state.pinnedIds }
-                    val slots = pinned.associateBy { state.pinnedSlots[it.id] ?: pinned.indexOf(it) }
+                    val slots = linkedMapOf<Int, SearchItem>()
+                    val unslotted = mutableListOf<SearchItem>()
+                    pinned.forEach { item ->
+                        val explicit = state.pinnedSlots[item.id]
+                        if (explicit != null && explicit >= 0 && explicit !in slots) {
+                            slots[explicit] = item
+                        } else {
+                            unslotted += item
+                        }
+                    }
+                    var cursor = 0
+                    unslotted.forEach { item ->
+                        while (cursor in slots) cursor++
+                        slots[cursor] = item
+                        cursor++
+                    }
                     val suggestions = ArrayDeque(unified.filterNot { it.id in state.pinnedIds })
-                    val end = maxOf((slots.keys.maxOrNull() ?: -1) + 1,
-                        if (showEmptySlots) gridColumns * 6 else 0)
+                    val maxPinnedEnd = (slots.keys.maxOrNull() ?: -1) + 1
+                    val end = maxOf(
+                        maxPinnedEnd,
+                        minFillSlots,
+                        if (showEmptySlots) gridColumns * 6 else 0
+                    )
                     val cells = (0 until end).mapNotNull { position ->
-                        slots[position] ?: (if (!showEmptySlots) suggestions.removeFirstOrNull() else null)
+                        slots[position]
+                            ?: (if (!showEmptySlots) suggestions.removeFirstOrNull() else null)
                             ?: if (showEmptySlots) SearchItem("empty-slot:$position", "Añadir", "", ItemType.CUSTOM) else null
                     }
-                    listOf(ResultSection("", cells + suggestions.toList()))
+                    if (cells.isEmpty()) emptyList() else listOf(ResultSection("", cells))
                 } else if (unified.isEmpty()) emptyList() else listOf(ResultSection("", unified))
             }
             val bestId = if (listMode) state.firstMatch()?.id else null
@@ -498,6 +520,10 @@ fun SearchBody(
             val cellBounds = remember { mutableMapOf<String, androidx.compose.ui.geometry.Rect>() }
             val displaySlots = sections.flatMap { it.items }.withIndex().associate { it.value.id to it.index }
             val currentDisplaySlots by rememberUpdatedState(displaySlots)
+            val openActions: (SearchItem) -> Unit = { target ->
+                if (onItemLongClickAtSlot != null) onItemLongClickAtSlot(target, currentDisplaySlots[target.id])
+                else onItemLongClick(target)
+            }
             val gestureScope = rememberCoroutineScope()
             val itemKeys = sections.flatMap { section ->
                 section.items.map { item -> "result:${section.title}:${item.id}" to item.id }
@@ -650,7 +676,7 @@ fun SearchBody(
                                                             draggedId = null
                                                             dragOffset = Offset.Zero
                                                             dropTargetId = null
-                                                            onItemLongClick(item)
+                                                            openActions(item)
                                                         }
                                                     }
                                                 },
@@ -683,7 +709,7 @@ fun SearchBody(
                                                                 else onMovePinned?.invoke(item.id, target)
                                                             }
                                                         } else {
-                                                            onItemLongClick(item)
+                                                            openActions(item)
                                                         }
                                                     }
                                                     draggedId = null
@@ -725,7 +751,7 @@ fun SearchBody(
                                 pinned = item.id in state.pinnedIds,
                                 onCall = { (onCallContact ?: onItemClick)(item) },
                                 onOpenWhatsApp = onItemClick,
-                                onActions = { onItemLongClick(item) }
+                                onActions = { openActions(item) }
                             )
                         } else if (!listMode && (pinnedContact || item.showsAsTile())) {
                             ResultTile(
@@ -741,7 +767,7 @@ fun SearchBody(
                                 onLongClick = if (draggable) {
                                     null
                                 } else {
-                                    { onItemLongClick(item) }
+                                    { openActions(item) }
                                 }
                             )
                         } else {
@@ -758,7 +784,7 @@ fun SearchBody(
                                 onLongClick = if (draggable) {
                                     null
                                 } else {
-                                    { onItemLongClick(item) }
+                                    { openActions(item) }
                                 }
                             )
                          }
@@ -1240,12 +1266,28 @@ fun SearchPanel(
     val panelSpacing = remember { Prefs.panelItemSpacing(context) }
     val panelShowLabels = remember { Prefs.panelShowLabels(context) }
     val pages = remember { Prefs.visiblePanelPages(context) }
-    val pagerState = rememberPagerState(pageCount = { pages.size })
+    val infiniteScroll = remember(pages) { Prefs.panelInfiniteScroll(context) && pages.size > 1 }
+    val pagerCount = if (infiniteScroll) pages.size * 1000 else pages.size
+    val initialPagerPage = if (infiniteScroll) pages.size * 500 else 0
+    val pagerState = rememberPagerState(initialPage = initialPagerPage, pageCount = { pagerCount })
+    fun realPageIndex(virtualPage: Int): Int =
+        if (pages.isEmpty()) 0 else ((virtualPage % pages.size) + pages.size) % pages.size
+    fun nearestVirtualPage(targetReal: Int): Int {
+        if (!infiniteScroll || pages.size <= 1) return targetReal.coerceIn(0, (pages.size - 1).coerceAtLeast(0))
+        val cur = pagerState.currentPage
+        val curReal = realPageIndex(cur)
+        var delta = targetReal - curReal
+        val half = pages.size / 2
+        if (delta > half) delta -= pages.size
+        else if (delta < -half) delta += pages.size
+        return (cur + delta).coerceIn(0, pagerCount - 1)
+    }
     val scope = rememberCoroutineScope()
 
     var shown by remember { mutableStateOf(false) }
     var closing by remember { mutableStateOf(false) }
     var actionItem by remember { mutableStateOf<SearchItem?>(null) }
+    var actionItemSlot by remember { mutableStateOf<Int?>(null) }
     var addKind by remember { mutableStateOf<PanelAddKind?>(null) }
     var addingSlot by remember { mutableStateOf<Int?>(null) }
     var openFolder by remember { mutableStateOf<SearchItem?>(null) }
@@ -1274,9 +1316,9 @@ fun SearchPanel(
     BackHandler {
         when {
             state.query.isNotBlank() -> onQueryChange("")
-            pagerState.currentPage != 0 -> scope.launch {
+            realPageIndex(pagerState.currentPage) != 0 -> scope.launch {
                 pagerState.animateScrollToPage(
-                    0,
+                    nearestVirtualPage(0),
                     animationSpec = tween(PanelMotion.TAB_DURATION_MS, easing = PanelMotion.StandardEasing)
                 )
             }
@@ -1304,7 +1346,7 @@ fun SearchPanel(
         }
     }
     LaunchedEffect(pagerState.currentPage) {
-        if (pages[pagerState.currentPage] != PanelPage.MAIN) {
+        if (pages.getOrNull(realPageIndex(pagerState.currentPage)) != PanelPage.MAIN) {
             awaitingInitialIme = false
             keyboard?.hide()
         }
@@ -1402,9 +1444,9 @@ fun SearchPanel(
             focusManager.clearFocus(force = true)
         } else scope.launch {
             val main = pages.indexOf(PanelPage.MAIN)
-            if (main >= 0 && pagerState.currentPage != main) {
+            if (main >= 0 && realPageIndex(pagerState.currentPage) != main) {
                 pagerState.animateScrollToPage(
-                    main,
+                    nearestVirtualPage(main),
                     animationSpec = tween(PanelMotion.TAB_DURATION_MS, easing = PanelMotion.StandardEasing)
                 )
             }
@@ -1474,6 +1516,16 @@ fun SearchPanel(
                     animationSpec = tween(PanelMotion.LAYOUT_DURATION_MS, easing = PanelMotion.StandardEasing),
                     label = "panelBottomOffset"
                 )
+                val cols = panelColumns.coerceIn(3, 6)
+                val gridWidth = (panelSize.width - 36.dp - (panelSpacing * (cols - 1)).dp).coerceAtLeast(120.dp)
+                val cellWidth = gridWidth / cols
+                val iconBase = (cellWidth * 0.58f).coerceIn(26.dp, 50.dp)
+                val estIconSize = (iconBase * panelIconScale.coerceIn(0.75f, 1.35f))
+                    .coerceAtMost((cellWidth * 0.80f).coerceAtLeast(22.dp))
+                val estRowHeight = estIconSize + 4.dp + (if (panelShowLabels) 18.dp else 0.dp) + panelSpacing.dp
+                val gridAvailableHeight = (panelSize.height - 66.dp).coerceAtLeast(estRowHeight)
+                val visibleRows = ((gridAvailableHeight + panelSpacing.dp) / estRowHeight).toInt().coerceIn(3, 8)
+                val minFillSlots = visibleRows * cols
 
                 // Campo de búsqueda único y oculto fuera del carrusel para mantener
                 // el foco del teclado sin duplicarlo entre páginas.
@@ -1498,6 +1550,7 @@ fun SearchPanel(
                         .width(panelSize.width)
                         .height(animatedPanelHeight + 8.dp)
                 ) { page ->
+                    val pageType = pages[realPageIndex(page)]
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -1526,7 +1579,7 @@ fun SearchPanel(
                                         onItemClick = launchPanelItem,
                                         onCallContact = onCallContact,
                                         onOpenFloating = onOpenFloating,
-                                        onItemLongClick = { actionItem = it },
+                                        onItemLongClick = { actionItemSlot = null; actionItem = it },
                                         onRequestContacts = onRequestContacts,
                                         modifier = Modifier.weight(1f),
                                         showSectionHeaders = false,
@@ -1542,7 +1595,7 @@ fun SearchPanel(
                                     )
                                 } else {
                                     Box(Modifier.weight(1f).fillMaxWidth()) {
-                                        when (pages[page]) {
+                                        when (pageType) {
                                             PanelPage.MAIN -> {
                                                 SearchPage(
                                                     state = state,
@@ -1550,9 +1603,13 @@ fun SearchPanel(
                                                     onItemClick = launchPanelItem,
                                                     onCallContact = onCallContact,
                                                     onOpenFloating = onOpenFloating,
-                                                    onItemLongClick = { actionItem = it },
+                                                    onItemLongClick = { actionItemSlot = null; actionItem = it },
+                                                    onItemLongClickAtSlot = { item, slot ->
+                                                        actionItemSlot = slot
+                                                        actionItem = item
+                                                    },
                                                     onRequestContacts = onRequestContacts,
-                                                    onAddRequest = { addKind = PanelAddKind.MENU },
+                                                    onAddRequest = { addingSlot = null; addKind = PanelAddKind.MENU },
                                                     onAddSlot = { addingSlot = it; addKind = PanelAddKind.MENU },
                                                     onMovePinned = onMovePinned,
                                                     onMovePinnedToSlot = onAssignSlot,
@@ -1564,7 +1621,8 @@ fun SearchPanel(
                                                         EdgePanelService.showWidget(context, item.id)
                                                         dismissPanel()
                                                     },
-                                                    wrapHeight = false
+                                                    wrapHeight = false,
+                                                    minFillSlots = minFillSlots
                                                 )
                                             }
 
@@ -1574,7 +1632,7 @@ fun SearchPanel(
                                                     onItemClick = launchPanelItem,
                                                     onOpenSettings = onOpenSettings,
                                                     onOpenFloating = onOpenFloating,
-                                                    onItemLongClick = { actionItem = it },
+                                                    onItemLongClick = { actionItemSlot = null; actionItem = it },
                                                     columns = panelColumns,
                                                     iconScale = panelIconScale,
                                                     spacingDp = panelSpacing,
@@ -1587,14 +1645,14 @@ fun SearchPanel(
                                                     state = state,
                                                     onItemClick = launchPanelItem,
                                                     onOpenFloating = onOpenFloating,
-                                                    onItemLongClick = { actionItem = it }
+                                                    onItemLongClick = { actionItemSlot = null; actionItem = it }
                                                 )
                                             }
 
                                             PanelPage.CONTACTS -> {
                                                 ContactsPage(
                                                     state = state,
-                                                    onContactActions = { actionItem = it },
+                                                    onContactActions = { actionItemSlot = null; actionItem = it },
                                                     onRequestContacts = onRequestContacts,
                                                     onCall = onCallContact,
                                                     onOpenWhatsApp = launchPanelItem
@@ -1636,18 +1694,44 @@ fun SearchPanel(
         item = actionItem,
         pinnedIds = state.pinnedIds,
         onAddShortcut = onAddPinnedShortcut,
-        onDismiss = { actionItem = null },
+        onDismiss = {
+            actionItem = null
+            actionItemSlot = null
+        },
         onOpen = { item ->
             actionItem = null
+            actionItemSlot = null
             launchPanelItem(item)
         },
         onOpenFloating = { item ->
             actionItem = null
+            actionItemSlot = null
             onOpenFloating(item)
         },
         onTogglePin = { item ->
+            val slot = actionItemSlot
             actionItem = null
-            onTogglePin(item)
+            actionItemSlot = null
+            if (item.id !in state.pinnedIds && slot != null) {
+                onAssignSlot(item.id, slot)
+            } else {
+                onTogglePin(item)
+            }
+        },
+        onReplaceSlot = if (actionItem != null && actionItem!!.id !in state.pinnedIds && actionItemSlot != null) {
+            {
+                val slot = actionItemSlot
+                actionItem = null
+                actionItemSlot = null
+                addingSlot = slot
+                addKind = PanelAddKind.MENU
+            }
+        } else null,
+        onAddMorePinned = {
+            actionItem = null
+            actionItemSlot = null
+            addingSlot = null
+            addKind = PanelAddKind.MENU
         }
     )
 
@@ -1921,6 +2005,7 @@ private fun SearchPage(
     onCallContact: (SearchItem) -> Unit,
     onOpenFloating: (SearchItem) -> Unit,
     onItemLongClick: (SearchItem) -> Unit,
+    onItemLongClickAtSlot: ((SearchItem, Int?) -> Unit)? = null,
     onRequestContacts: () -> Unit,
     onAddRequest: () -> Unit,
     onAddSlot: (Int) -> Unit,
@@ -1931,7 +2016,8 @@ private fun SearchPage(
     showLabels: Boolean,
     onWidgetGesture: (SearchItem) -> Unit,
     onMovePinnedToSlot: (String, Int) -> Unit,
-    wrapHeight: Boolean = false
+    wrapHeight: Boolean = false,
+    minFillSlots: Int = 0
 ) {
     Column(if (wrapHeight) Modifier.fillMaxWidth() else Modifier.fillMaxSize()) {
 
@@ -1939,16 +2025,23 @@ private fun SearchPage(
             val pinned = state.sections.flatMap { it.items }.filter {
                 it.id in state.pinnedIds && it.type != ItemType.SETTING
             }.distinctBy { it.id }
-            // Recientes y "Para esta hora" viven en la página Ajustes; aquí solo
-            // quedan los favoritos, con toda la altura disponible.
+            val frequentFill = state.frequentApps.filterNot { it.id in state.pinnedIds }
+            // Las apps ancladas ocupan sus posiciones y, si no llenan el panel,
+            // los huecos restantes se completan con las frecuentes no ancladas.
             PanelSection(
                 "Favoritos",
                 if (wrapHeight) Modifier.fillMaxWidth() else Modifier.weight(1f)
             ) {
                 SearchBody(
-                    state = state.copy(sections = listOf(ResultSection("Ancladas", pinned))),
+                    state = state.copy(
+                        sections = listOf(
+                            ResultSection("Ancladas", pinned),
+                            ResultSection("Frecuentes", frequentFill)
+                        )
+                    ),
                     onItemClick = onItemClick, onCallContact = onCallContact,
                     onOpenFloating = onOpenFloating, onItemLongClick = onItemLongClick,
+                    onItemLongClickAtSlot = onItemLongClickAtSlot,
                     onRequestContacts = onRequestContacts,
                     modifier = if (wrapHeight) Modifier.fillMaxWidth() else Modifier.fillMaxSize(),
                     bottomContentPaddingDp = 0,
@@ -1958,7 +2051,8 @@ private fun SearchPage(
                     onMovePinned = onMovePinned, onMovePinnedToSlot = onMovePinnedToSlot,
                     onAddSlot = onAddSlot, gridColumns = columns,
                     tileIconScale = iconScale, tileSpacingDp = spacingDp,
-                    onWidgetGesture = onWidgetGesture, wrapHeight = wrapHeight
+                    onWidgetGesture = onWidgetGesture, wrapHeight = wrapHeight,
+                    minFillSlots = minFillSlots
                 )
             }
         } else SearchBody(
@@ -2703,7 +2797,9 @@ private fun ItemActionsSheet(
     onDismiss: () -> Unit,
     onOpen: (SearchItem) -> Unit,
     onOpenFloating: (SearchItem) -> Unit,
-    onTogglePin: (SearchItem) -> Unit
+    onTogglePin: (SearchItem) -> Unit,
+    onReplaceSlot: (() -> Unit)? = null,
+    onAddMorePinned: (() -> Unit)? = null
 ) {
     if (item == null) return
 
@@ -2815,6 +2911,30 @@ private fun ItemActionsSheet(
                     icon = { Icon(if (pinned) Icons.Filled.Star else Icons.Filled.StarBorder, null, Modifier.size(22.dp)) },
                     label = if (pinned) "Desanclar" else "Anclar"
                 ) { onTogglePin(item) }
+            }
+
+            // Panel: reemplazar sugerencia frecuente o anclar más elementos
+            if (onReplaceSlot != null || onAddMorePinned != null) {
+                Spacer(Modifier.height(14.dp))
+                SheetGroup {
+                    if (onReplaceSlot != null) {
+                        SheetAction(
+                            icon = { Icon(Icons.AutoMirrored.Filled.CompareArrows, null) },
+                            label = "Cambiar por otra app",
+                            supporting = "Ancla otra app, contacto o atajo en este espacio",
+                            onClick = onReplaceSlot
+                        )
+                        if (onAddMorePinned != null) SheetDivider()
+                    }
+                    if (onAddMorePinned != null) {
+                        SheetAction(
+                            icon = { Icon(Icons.Filled.Add, null) },
+                            label = "Anclar más apps",
+                            supporting = "Añade otra app, carpeta o atajo al panel",
+                            onClick = onAddMorePinned
+                        )
+                    }
+                }
             }
 
             // Contacto

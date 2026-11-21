@@ -2045,6 +2045,7 @@ private fun PanelOrderCard() {
     val context = LocalContext.current
     var pages by remember { mutableStateOf(Prefs.panelPageOrder(context)) }
     var hidden by remember { mutableStateOf(Prefs.hiddenPanelPages(context)) }
+    var infiniteScroll by remember { mutableStateOf(Prefs.panelInfiniteScroll(context)) }
 
     SettingsSectionCard(
         title = "Páginas del panel lateral",
@@ -2053,6 +2054,18 @@ private fun PanelOrderCard() {
         badgeText = "${pages.count { it.name !in hidden }} activas",
         badgeActive = true
     ) {
+        SwitchRow(
+            title = "Desplazamiento infinito",
+            subtitle = "Al llegar al final del carrusel vuelve al inicio sin detenerse",
+            checked = infiniteScroll,
+            onCheckedChange = {
+                infiniteScroll = it
+                Prefs.setPanelInfiniteScroll(context, it)
+            }
+        )
+
+        SectionDivider()
+
         Text(
             text = "La primera página activa es la que se muestra al abrir el panel. Ocultar una página no borra sus iconos anclados ni sus widgets.",
             style = MaterialTheme.typography.bodySmall,

@@ -58,7 +58,22 @@ class ActivatorControlsActivity : ComponentActivity() {
                     val modes = remember(mode) {
                         if (mode == "lastapp") listOf("lastapp") else listOf("brightness", "volume", "actions")
                     }
-                    val pager = rememberPagerState(initialPage = modes.indexOf(mode).coerceAtLeast(0), pageCount = { modes.size })
+                    val infiniteScroll = remember(modes) { Prefs.panelInfiniteScroll(this) && modes.size > 1 }
+                    val pagerCount = if (infiniteScroll) modes.size * 1000 else modes.size
+                    val startIndex = modes.indexOf(mode).coerceAtLeast(0)
+                    val initialPagerPage = if (infiniteScroll) modes.size * 500 + startIndex else startIndex
+                    val pager = rememberPagerState(initialPage = initialPagerPage, pageCount = { pagerCount })
+                    fun realIndex(virtualPage: Int): Int = ((virtualPage % modes.size) + modes.size) % modes.size
+                    fun nearestVirtualPage(targetReal: Int): Int {
+                        if (!infiniteScroll) return targetReal.coerceIn(0, modes.lastIndex)
+                        val cur = pager.currentPage
+                        val curReal = realIndex(cur)
+                        var delta = targetReal - curReal
+                        val half = modes.size / 2
+                        if (delta > half) delta -= modes.size
+                        else if (delta < -half) delta += modes.size
+                        return (cur + delta).coerceIn(0, pagerCount - 1)
+                    }
                     val scope = rememberCoroutineScope()
                     var shown by remember { mutableStateOf(false) }
                     var closing by remember { mutableStateOf(false) }
@@ -107,6 +122,7 @@ class ActivatorControlsActivity : ComponentActivity() {
                                 contentAlignment = if (side == PanelSide.END) Alignment.CenterEnd else Alignment.CenterStart
                             ) {
                                 val panelSize = computePanelSize(this@ActivatorControlsActivity, maxWidth, maxHeight)
+                                val activeRealPage = realIndex(pager.currentPage)
                                 HorizontalPager(
                                     state = pager,
                                     pageSpacing = 0.dp,
@@ -130,7 +146,7 @@ class ActivatorControlsActivity : ComponentActivity() {
                                                 )
                                         ) {
                                             Box(Modifier.weight(1f).fillMaxWidth()) {
-                                                ControlPanelPage(modes[page])
+                                                ControlPanelPage(modes[realIndex(page)])
                                             }
                                             if (modes.size > 1) Row(Modifier.fillMaxWidth()) {
                                                 listOf("Brillo", "Audio", "Silencio").forEachIndexed { index, label ->
@@ -138,7 +154,7 @@ class ActivatorControlsActivity : ComponentActivity() {
                                                         onClick = {
                                                             scope.launch {
                                                                 pager.animateScrollToPage(
-                                                                    index,
+                                                                    nearestVirtualPage(index),
                                                                     animationSpec = tween(
                                                                         PanelMotion.TAB_DURATION_MS,
                                                                         easing = PanelMotion.StandardEasing
@@ -152,7 +168,7 @@ class ActivatorControlsActivity : ComponentActivity() {
                                                             label,
                                                             style = MaterialTheme.typography.labelSmall,
                                                             maxLines = 1,
-                                                            color = if (pager.currentPage == index) {
+                                                            color = if (activeRealPage == index) {
                                                                 MaterialTheme.colorScheme.primary
                                                             } else {
                                                                 MaterialTheme.colorScheme.onSurfaceVariant

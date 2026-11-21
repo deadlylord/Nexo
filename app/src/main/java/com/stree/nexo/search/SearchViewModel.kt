@@ -183,7 +183,13 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             searchSections(currentItems, query, pinnedIds, pinnedOrder)
         }
-        _state.update { it.copy(sections = sections) }
+        val unpinnedApps = currentItems.filter { it.type == ItemType.APP && it.id !in pinnedIds }
+        val appById = unpinnedApps.associateBy { it.id }
+        val appIds = unpinnedApps.map { it.id }
+        val byFrequent = repository.usage.frequent(appIds, appIds.size).mapNotNull { appById[it] }
+        val byRecent = repository.usage.recent(appIds, appIds.size).mapNotNull { appById[it] }
+        val frequentApps = (byFrequent + byRecent + unpinnedApps).distinctBy { it.id }
+        _state.update { it.copy(sections = sections, frequentApps = frequentApps) }
     }
 
     private fun idleSections(
