@@ -98,10 +98,17 @@ object Prefs {
     }
 
     fun panelHeight(context: Context): Float =
-        prefs(context).getFloat("panel_height", 0.72f).coerceIn(0.55f, 0.85f)
+        prefs(context).getFloat("panel_height", 0.52f).coerceIn(0.40f, 0.60f)
 
     fun setPanelHeight(context: Context, value: Float) {
-        prefs(context).edit().putFloat("panel_height", value.coerceIn(0.55f, 0.85f)).apply()
+        prefs(context).edit().putFloat("panel_height", value.coerceIn(0.40f, 0.60f)).apply()
+    }
+
+    fun lastImeHeightDp(context: Context): Int =
+        prefs(context).getInt("last_ime_height_dp", 0).coerceIn(0, 520)
+
+    fun setLastImeHeightDp(context: Context, heightDp: Int) {
+        prefs(context).edit().putInt("last_ime_height_dp", heightDp.coerceIn(0, 520)).apply()
     }
 
     fun panelIconScale(context: Context): Float =

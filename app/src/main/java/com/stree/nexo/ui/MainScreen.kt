@@ -1,5 +1,12 @@
 package com.stree.nexo.ui
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -99,83 +106,100 @@ fun MainScreen(
             }
         }
     ) { padding ->
-        when (tab) {
-            MainTab.SEARCH -> {
-                SearchContent(
-                    state = state,
-                    onQueryChange = onQueryChange,
-                    onItemClick = onItemClick,
-                    onTogglePin = onTogglePin,
-                    onOpenFloating = onOpenFloating,
-                    onRequestContacts = onRequestContacts,
-                    onAddShortcut = onAddShortcut,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding)
-                        .windowInsetsPadding(WindowInsets.statusBars),
-                    header = {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 20.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    text = "Nexo",
-                                    style = MaterialTheme.typography.headlineSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Text(
-                                    text = "Todo a uno o dos toques",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+        AnimatedContent(
+            targetState = tab,
+            transitionSpec = {
+                val forward = targetState.ordinal >= initialState.ordinal
+                val direction = if (forward) 1 else -1
+                (slideInHorizontally(
+                    animationSpec = tween(PanelMotion.TAB_DURATION_MS, easing = PanelMotion.StandardEasing),
+                    initialOffsetX = { fullWidth -> direction * (fullWidth / 7) }
+                ) + fadeIn(tween(PanelMotion.TAB_DURATION_MS, easing = PanelMotion.StandardEasing))) togetherWith
+                    (slideOutHorizontally(
+                        animationSpec = tween(PanelMotion.TAB_DURATION_MS, easing = PanelMotion.StandardEasing),
+                        targetOffsetX = { fullWidth -> -direction * (fullWidth / 7) }
+                    ) + fadeOut(tween(140, easing = PanelMotion.StandardEasing)))
+            },
+            label = "mainTabTransition"
+        ) { activeTab ->
+            when (activeTab) {
+                MainTab.SEARCH -> {
+                    SearchContent(
+                        state = state,
+                        onQueryChange = onQueryChange,
+                        onItemClick = onItemClick,
+                        onTogglePin = onTogglePin,
+                        onOpenFloating = onOpenFloating,
+                        onRequestContacts = onRequestContacts,
+                        onAddShortcut = onAddShortcut,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(padding)
+                            .windowInsetsPadding(WindowInsets.statusBars),
+                        header = {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Nexo",
+                                        style = MaterialTheme.typography.headlineSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = "Todo a uno o dos toques",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
-                    }
-                )
-            }
+                    )
+                }
 
-            MainTab.SHORTCUTS -> {
-                ShortcutsScreen(
-                    apps = state.allItems.filter { it.type == com.stree.nexo.data.ItemType.APP },
-                    contacts = state.allItems.filter {
-                        it.type == com.stree.nexo.data.ItemType.CONTACT &&
-                            !it.id.startsWith("custom:")
-                    },
-                    shortcuts = state.allItems.filter { it.id.startsWith("custom:") },
-                    onAdd = onAddShortcut,
-                    onDelete = onDeleteShortcut,
-                    onOpenHomeSettings = onOpenHomeSettings,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding)
-                        .windowInsetsPadding(WindowInsets.statusBars)
-                )
-            }
+                MainTab.SHORTCUTS -> {
+                    ShortcutsScreen(
+                        apps = state.allItems.filter { it.type == com.stree.nexo.data.ItemType.APP },
+                        contacts = state.allItems.filter {
+                            it.type == com.stree.nexo.data.ItemType.CONTACT &&
+                                !it.id.startsWith("custom:")
+                        },
+                        shortcuts = state.allItems.filter { it.id.startsWith("custom:") },
+                        onAdd = onAddShortcut,
+                        onDelete = onDeleteShortcut,
+                        onOpenHomeSettings = onOpenHomeSettings,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(padding)
+                            .windowInsetsPadding(WindowInsets.statusBars)
+                    )
+                }
 
-            MainTab.SETTINGS -> {
-                SettingsScreen(
-                    panelEnabled = panelEnabled,
-                    panelSide = panelSide,
-                    contactsEnabled = contactsEnabled,
-                    hapticsEnabled = hapticsEnabled,
-                    shortcutsBlocked = state.shortcutsBlocked,
-                    onTogglePanel = onTogglePanel,
-                    onSideChange = onSideChange,
-                    onToggleContacts = onToggleContacts,
-                    onToggleHaptics = onToggleHaptics,
-                    onOpenOverlayPermission = onOpenOverlayPermission,
-                    onRequestBatteryExemption = onRequestBatteryExemption,
-                    onOpenHomeSettings = onOpenHomeSettings,
-                    onRefresh = onRefresh,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding)
-                        .windowInsetsPadding(WindowInsets.statusBars)
-                )
+                MainTab.SETTINGS -> {
+                    SettingsScreen(
+                        panelEnabled = panelEnabled,
+                        panelSide = panelSide,
+                        contactsEnabled = contactsEnabled,
+                        hapticsEnabled = hapticsEnabled,
+                        shortcutsBlocked = state.shortcutsBlocked,
+                        onTogglePanel = onTogglePanel,
+                        onSideChange = onSideChange,
+                        onToggleContacts = onToggleContacts,
+                        onToggleHaptics = onToggleHaptics,
+                        onOpenOverlayPermission = onOpenOverlayPermission,
+                        onRequestBatteryExemption = onRequestBatteryExemption,
+                        onOpenHomeSettings = onOpenHomeSettings,
+                        onRefresh = onRefresh,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(padding)
+                            .windowInsetsPadding(WindowInsets.statusBars)
+                    )
+                }
             }
         }
     }

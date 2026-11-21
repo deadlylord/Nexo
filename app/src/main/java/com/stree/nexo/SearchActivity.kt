@@ -22,6 +22,8 @@ import com.stree.nexo.panel.EdgePanelService
 import com.stree.nexo.search.ItemLauncher
 import com.stree.nexo.search.SearchViewModel
 import com.stree.nexo.ui.SearchPanel
+import com.stree.nexo.ui.disableSystemTransitions
+import com.stree.nexo.ui.finishNoSystemAnimation
 import com.stree.nexo.ui.theme.NexoTheme
 import com.stree.nexo.ui.theme.PanelTheme
 
@@ -48,8 +50,9 @@ class SearchActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        disableSystemTransitions()
         window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-        // The window keeps its size so the panel can grow over the keyboard.
+        // The window keeps its size so the panel can position smoothly over the keyboard.
         window.setSoftInputMode(
             WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING or
                 WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
@@ -65,44 +68,38 @@ class SearchActivity : ComponentActivity() {
                     val state by viewModel.state.collectAsStateWithLifecycle()
 
                     SearchPanel(
-                    state = state,
-                    side = side,
-                    onQueryChange = viewModel::onQueryChange,
-                    onItemClick = ::openItem,
-                    onCallContact = ::callContact,
-                    onTogglePin = ::togglePin,
-                    onMovePinned = viewModel::movePinned,
-                    onOpenFloating = ::openInFloating,
-                    onAddShortcut = viewModel::addCustomShortcut,
-                    onAddPinnedShortcut = viewModel::addPinnedShortcut,
-                    onAddPinnedAtSlot = viewModel::addPinnedShortcutAtSlot,
-                    onAssignSlot = viewModel::assignPinnedSlot,
-                    onExpand = {
-                        startActivity(Intent(this, MainActivity::class.java).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                        })
-                        finishAndRemoveTask()
-                    },
-                    onOpenSettings = {
-                        startActivity(Intent(this, MainActivity::class.java).apply {
-                            putExtra("open_settings", true)
-                            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                        })
-                        finishAndRemoveTask()
-                    },
-                    onRequestContacts = {
-                        if (ContextCompat.checkSelfPermission(
-                                this,
-                                Manifest.permission.READ_CONTACTS
-                            ) == PackageManager.PERMISSION_GRANTED
-                        ) {
-                            Prefs.setContactsEnabled(this, true)
-                            viewModel.refresh(force = true)
-                        } else {
-                            contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
-                        }
-                    },
-                    onClose = { finishAndRemoveTask() }
+                        state = state,
+                        side = side,
+                        onQueryChange = viewModel::onQueryChange,
+                        onItemClick = ::openItem,
+                        onCallContact = ::callContact,
+                        onTogglePin = ::togglePin,
+                        onMovePinned = viewModel::movePinned,
+                        onOpenFloating = ::openInFloating,
+                        onAddShortcut = viewModel::addCustomShortcut,
+                        onAddPinnedShortcut = viewModel::addPinnedShortcut,
+                        onAddPinnedAtSlot = viewModel::addPinnedShortcutAtSlot,
+                        onAssignSlot = viewModel::assignPinnedSlot,
+                        onOpenSettings = {
+                            startActivity(Intent(this, MainActivity::class.java).apply {
+                                putExtra("open_settings", true)
+                                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                            })
+                            finishNoSystemAnimation(removeTask = true)
+                        },
+                        onRequestContacts = {
+                            if (ContextCompat.checkSelfPermission(
+                                    this,
+                                    Manifest.permission.READ_CONTACTS
+                                ) == PackageManager.PERMISSION_GRANTED
+                            ) {
+                                Prefs.setContactsEnabled(this, true)
+                                viewModel.refresh(force = true)
+                            } else {
+                                contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+                            }
+                        },
+                        onClose = { finishNoSystemAnimation(removeTask = true) }
                     )
                 }
             }
@@ -141,7 +138,7 @@ class SearchActivity : ComponentActivity() {
 
         val launched = ItemLauncher.launchFloating(this, item)
         if (launched) {
-            finishAndRemoveTask()
+            finishNoSystemAnimation(removeTask = true)
             return
         }
 
@@ -152,7 +149,7 @@ class SearchActivity : ComponentActivity() {
                 "Ventana flotante no disponible; abriendo normal",
                 Toast.LENGTH_SHORT
             ).show()
-            finishAndRemoveTask()
+            finishNoSystemAnimation(removeTask = true)
         } else {
             Toast.makeText(this, "No se pudo abrir ${item.title}", Toast.LENGTH_SHORT).show()
         }
@@ -168,7 +165,7 @@ class SearchActivity : ComponentActivity() {
         val storeQuery = com.stree.nexo.data.PlayStore.queryOf(item)
         if (storeQuery != null) {
             if (com.stree.nexo.data.PlayStore.open(this, storeQuery)) {
-                finishAndRemoveTask()
+                finishNoSystemAnimation(removeTask = true)
             } else {
                 Toast.makeText(this, "No se pudo abrir Play Store", Toast.LENGTH_SHORT).show()
             }
@@ -177,7 +174,7 @@ class SearchActivity : ComponentActivity() {
         viewModel.recordUsage(item.id)
         val launched = ItemLauncher.launch(this, item)
         if (launched) {
-            finishAndRemoveTask()
+            finishNoSystemAnimation(removeTask = true)
         } else {
             Toast.makeText(this, "No se pudo abrir ${item.title}", Toast.LENGTH_SHORT).show()
         }

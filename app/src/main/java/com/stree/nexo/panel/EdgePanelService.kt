@@ -273,6 +273,7 @@ class EdgePanelService : Service() {
         val intent = Intent(this, SearchActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+            addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
         }
         runCatching { startActivity(intent) }
     }
@@ -282,7 +283,11 @@ class EdgePanelService : Service() {
         runCatching {
             startActivity(Intent(this, ActivatorControlsActivity::class.java)
                 .putExtra("control", mode)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS))
+                .addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or
+                        Intent.FLAG_ACTIVITY_NO_ANIMATION
+                ))
         }
     }
 

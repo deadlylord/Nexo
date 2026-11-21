@@ -1,19 +1,30 @@
 package com.stree.nexo
 
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -22,9 +33,13 @@ import com.stree.nexo.data.PanelSide
 import com.stree.nexo.data.Prefs
 import com.stree.nexo.panel.EdgePanelService
 import com.stree.nexo.ui.ControlPanelPage
+import com.stree.nexo.ui.PanelMotion
 import com.stree.nexo.ui.PanelSurface
+import com.stree.nexo.ui.disableSystemTransitions
+import com.stree.nexo.ui.finishNoSystemAnimation
 import com.stree.nexo.ui.theme.NexoTheme
 import com.stree.nexo.ui.theme.PanelTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Brightness, audio and silence share their own pager, separate from launcher pages. */
@@ -32,7 +47,10 @@ class ActivatorControlsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        disableSystemTransitions()
+        window.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
         val mode = intent.getStringExtra("control") ?: "actions"
+        val side = Prefs.panelSide(this)
         setContent {
             NexoTheme(darkTheme = true) {
                 PanelTheme(Prefs.panelStyle(this)) {
@@ -41,28 +59,97 @@ class ActivatorControlsActivity : ComponentActivity() {
                     }
                     val pager = rememberPagerState(initialPage = modes.indexOf(mode).coerceAtLeast(0), pageCount = { modes.size })
                     val scope = rememberCoroutineScope()
-                    BoxWithConstraints(
-                        Modifier.fillMaxSize().background(Color.Black.copy(alpha = .18f)).clickable { finish() },
-                        contentAlignment = if (Prefs.panelSide(this) == PanelSide.END) Alignment.CenterEnd else Alignment.CenterStart
-                    ) {
-                        val width = minOf(maxWidth * .82f, 300.dp)
-                        val contentHeight = when (modes[pager.currentPage]) {
-                            "brightness" -> 220.dp
-                            "volume" -> 340.dp
-                            else -> 300.dp
-                        }
-                        val height = minOf(maxHeight - 24.dp, 480.dp, contentHeight + if (modes.size > 1) 48.dp else 0.dp)
-                        PanelSurface(Modifier.width(width).height(height)
-                            .padding(12.dp).clickable {}) {
-                            HorizontalPager(pager, modifier = Modifier.weight(1f)) { page ->
-                                ControlPanelPage(modes[page])
+                    var shown by remember { mutableStateOf(false) }
+                    var closing by remember { mutableStateOf(false) }
+                    LaunchedEffect(Unit) { shown = true }
+
+                    val dismiss: () -> Unit = {
+                        if (!closing) {
+                            closing = true
+                            shown = false
+                            scope.launch {
+                                delay(PanelMotion.EXIT_DURATION_MS.toLong())
+                                finishNoSystemAnimation()
                             }
-                            if (modes.size > 1) Row(Modifier.fillMaxWidth()) {
-                                listOf("Brillo", "Audio", "Silencio").forEachIndexed { index, label ->
-                                    TextButton(onClick = { scope.launch { pager.animateScrollToPage(index) } },
-                                        modifier = Modifier.weight(1f)) {
-                                        Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1,
-                                            color = if (pager.currentPage == index) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+
+                    BackHandler { dismiss() }
+
+                    val scrimAlpha by animateFloatAsState(
+                        targetValue = if (shown) 0.22f else 0f,
+                        animationSpec = tween(
+                            durationMillis = if (shown) PanelMotion.SCRIM_ENTER_MS else PanelMotion.SCRIM_EXIT_MS,
+                            easing = if (shown) PanelMotion.EnterEasing else PanelMotion.ExitEasing
+                        ),
+                        label = "controlsScrim"
+                    )
+
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = scrimAlpha))
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = dismiss
+                            )
+                    ) {
+                        AnimatedVisibility(
+                            visible = shown,
+                            enter = PanelMotion.sideEnter(side),
+                            exit = PanelMotion.sideExit(side),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            BoxWithConstraints(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = if (side == PanelSide.END) Alignment.CenterEnd else Alignment.CenterStart
+                            ) {
+                                val width = minOf(maxWidth * .82f, 300.dp)
+                                val contentHeight = when (modes[pager.currentPage]) {
+                                    "brightness" -> 220.dp
+                                    "volume" -> 340.dp
+                                    else -> 300.dp
+                                }
+                                val height = minOf(maxHeight - 24.dp, 480.dp, contentHeight + if (modes.size > 1) 48.dp else 0.dp)
+                                PanelSurface(
+                                    Modifier
+                                        .width(width)
+                                        .height(height)
+                                        .animateContentSize(
+                                            animationSpec = tween(PanelMotion.LAYOUT_DURATION_MS, easing = PanelMotion.StandardEasing)
+                                        )
+                                        .padding(12.dp)
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null,
+                                            onClick = {}
+                                        )
+                                ) {
+                                    HorizontalPager(pager, modifier = Modifier.weight(1f)) { page ->
+                                        ControlPanelPage(modes[page])
+                                    }
+                                    if (modes.size > 1) Row(Modifier.fillMaxWidth()) {
+                                        listOf("Brillo", "Audio", "Silencio").forEachIndexed { index, label ->
+                                            TextButton(
+                                                onClick = {
+                                                    scope.launch {
+                                                        pager.animateScrollToPage(
+                                                            index,
+                                                            animationSpec = tween(PanelMotion.TAB_DURATION_MS, easing = PanelMotion.StandardEasing)
+                                                        )
+                                                    }
+                                                },
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Text(
+                                                    label,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    maxLines = 1,
+                                                    color = if (pager.currentPage == index) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }

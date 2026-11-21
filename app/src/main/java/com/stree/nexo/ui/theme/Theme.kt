@@ -38,13 +38,17 @@ data class ThemeVisualSpec(
     val borderWidthDp: Float,
     val borderColors: List<Color>,
     val sheenColors: List<Color>,
-    val swatchColors: List<Color>
+    val swatchColors: List<Color>,
+    val actionIconColors: List<Color> = listOf(primary, secondary, tertiary)
 ) {
     val borderBrush: Brush
         get() = Brush.linearGradient(borderColors)
 
     val sheenBrush: Brush
         get() = Brush.linearGradient(sheenColors)
+
+    val actionIconBrush: Brush
+        get() = Brush.linearGradient(actionIconColors)
 }
 
 fun PanelStyle.visualSpec(light: Boolean = false): ThemeVisualSpec {
@@ -78,7 +82,8 @@ fun PanelStyle.visualSpec(light: Boolean = false): ThemeVisualSpec {
                 Color.White.copy(alpha = 0.02f),
                 Color.Black.copy(alpha = 0.24f)
             ),
-            swatchColors = listOf(baseSurface, Color(0xFFB5E5FF), Color(0xFF64748B))
+            swatchColors = listOf(baseSurface, Color(0xFFB5E5FF), Color(0xFF64748B)),
+            actionIconColors = listOf(Color.White, Color(0xFFB5E5FF), Color(0xFF93C5FD))
         )
     }
 
@@ -118,7 +123,8 @@ fun PanelStyle.visualSpec(light: Boolean = false): ThemeVisualSpec {
                 primary.copy(alpha = 0.06f),
                 secondary.copy(alpha = 0.08f)
             ),
-            swatchColors = listOf(Color(0xFFFCFCFF), primary, secondary)
+            swatchColors = listOf(Color(0xFFFCFCFF), primary, secondary),
+            actionIconColors = listOf(primary, secondary)
         )
     }
 
@@ -284,7 +290,8 @@ fun PanelStyle.visualSpec(light: Boolean = false): ThemeVisualSpec {
                 Color(0xFFA855F7).copy(alpha = 0.05f),
                 Color(0xFFE879F9).copy(alpha = 0.14f)
             ),
-            swatchColors = listOf(Color(0xFF110B22), Color(0xFF22D3EE), Color(0xFFE879F9))
+            swatchColors = listOf(Color(0xFF110B22), Color(0xFF22D3EE), Color(0xFFE879F9)),
+            actionIconColors = listOf(Color(0xFF22D3EE), Color(0xFFA855F7), Color(0xFFE879F9))
         )
 
         PanelStyle.SUNSET -> ThemeVisualSpec(
@@ -338,7 +345,8 @@ fun PanelStyle.visualSpec(light: Boolean = false): ThemeVisualSpec {
                 Color.Transparent,
                 Color(0xFFD8B4FE).copy(alpha = 0.08f)
             ),
-            swatchColors = listOf(Color(0xFF19111C), Color(0xFFF4A8C8), Color(0xFFD8B4FE))
+            swatchColors = listOf(Color(0xFF19111C), Color(0xFFF4A8C8), Color(0xFFD8B4FE)),
+            actionIconColors = listOf(Color(0xFFFBCFE8), Color(0xFFF4A8C8), Color(0xFFD8B4FE))
         )
 
         PanelStyle.MONO -> ThemeVisualSpec(
@@ -365,7 +373,8 @@ fun PanelStyle.visualSpec(light: Boolean = false): ThemeVisualSpec {
                 Color.Transparent,
                 Color.White.copy(alpha = 0.02f)
             ),
-            swatchColors = listOf(Color(0xFF050505), Color(0xFFF4F4F5), Color(0xFF71717A))
+            swatchColors = listOf(Color(0xFF050505), Color(0xFFF4F4F5), Color(0xFF71717A)),
+            actionIconColors = listOf(Color.White, Color(0xFFE4E4E7), Color(0xFFA1A1AA))
         )
     }
 }

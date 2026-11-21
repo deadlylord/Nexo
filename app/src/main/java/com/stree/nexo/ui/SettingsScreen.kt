@@ -53,10 +53,12 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SwipeVertical
@@ -889,8 +891,8 @@ private fun PanelAppearanceCard() {
                 label = "Altura del panel",
                 valueText = "${(height * 100).roundToInt()} %",
                 value = height,
-                valueRange = 0.55f..0.85f,
-                steps = 5,
+                valueRange = 0.40f..0.60f,
+                steps = 9,
                 onValueChange = { height = it },
                 onValueChangeFinished = { Prefs.setPanelHeight(context, height) }
             )
@@ -1035,7 +1037,7 @@ private fun PanelPreviewCard(config: PanelPreviewConfig) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp)
-                    .height(166.dp)
+                    .height(194.dp)
             ) {
                 Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 10.dp)) {
                     // Cabecera simulada del panel
@@ -1106,6 +1108,31 @@ private fun PanelPreviewCard(config: PanelPreviewConfig) {
                                     }
                                 }
                             }
+                        }
+                    }
+                    HorizontalDivider(
+                        modifier = Modifier.padding(top = 6.dp, bottom = 4.dp),
+                        thickness = 0.5.dp,
+                        color = spec.outlineVariant.copy(alpha = 0.28f)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceAround,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val previewBrush = remember(spec) { spec.actionIconBrush }
+                        listOf(
+                            Icons.Filled.PlayArrow,
+                            Icons.Filled.SkipNext,
+                            Icons.Filled.Keyboard,
+                            Icons.Filled.Settings
+                        ).forEach { icon ->
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp).gradientTint(previewBrush),
+                                tint = Color.White
+                            )
                         }
                     }
                 }

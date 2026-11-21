@@ -119,7 +119,7 @@ private fun CustomShortcut.toSearchItem(context: Context): SearchItem {
         Intent("com.stree.nexo.OPEN_PAIR", uri)
     } else if (isFolder) {
         Intent(context, com.stree.nexo.FolderActivity::class.java).setData(uri)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
     } else if (isAppShortcut) {
         Intent("com.stree.nexo.OPEN_APP", uri)
     } else if (uri != null) {

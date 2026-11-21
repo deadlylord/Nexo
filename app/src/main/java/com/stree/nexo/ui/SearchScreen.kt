@@ -2,10 +2,12 @@ package com.stree.nexo.ui
 
 import android.app.Activity
 import android.content.Context
+import android.media.AudioManager
+import android.os.SystemClock
+import android.view.KeyEvent
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
@@ -17,14 +19,15 @@ import android.view.View
 import android.view.ViewTreeObserver
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -47,6 +50,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -70,6 +74,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.graphics.SolidColor
 import com.stree.nexo.data.PanelPage
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -96,6 +101,7 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Nfc
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Schedule
@@ -103,6 +109,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Gesture
@@ -177,6 +184,7 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.stree.nexo.R
 import com.stree.nexo.data.Haptics
 import com.stree.nexo.data.ContactShortcuts
@@ -191,8 +199,10 @@ import com.stree.nexo.data.SearchItem
 import com.stree.nexo.data.SearchUiState
 import com.stree.nexo.data.ResultSection
 import com.stree.nexo.data.PlayStore
+import com.stree.nexo.media.MediaControlService
 import com.stree.nexo.search.ItemLauncher
 import com.stree.nexo.search.WhatsAppLinks
+import com.stree.nexo.ui.theme.visualSpec
 import java.text.Collator
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1076,7 +1086,11 @@ internal fun ItemIcon(item: SearchItem, size: Dp = 38.dp) {
     val animate = remember { Prefs.animatePanelIcons(context) }
     var entered by remember(item.id) { mutableStateOf(!animate) }
     LaunchedEffect(item.id) { entered = true }
-    val entrance by animateFloatAsState(if (entered) 1f else 0f, tween(150), label = "iconEntrance")
+    val entrance by animateFloatAsState(
+        targetValue = if (entered) 1f else 0f,
+        animationSpec = tween(160, easing = PanelMotion.EnterEasing),
+        label = "iconEntrance"
+    )
     val photo by produceState<android.graphics.Bitmap?>(null, item.photoUri) {
         value = item.photoUri?.let { uri -> withContext(Dispatchers.IO) { ContactPhotos.load(context, uri) } }
     }
@@ -1085,8 +1099,8 @@ internal fun ItemIcon(item: SearchItem, size: Dp = 38.dp) {
         modifier = Modifier
             .size(size)
             .graphicsLayer {
-                alpha = .5f + .5f * entrance
-                scaleX = .9f + .1f * entrance
+                alpha = 0.72f + 0.28f * entrance
+                scaleX = 0.95f + 0.05f * entrance
                 scaleY = scaleX
             }
             .clip(shape)
@@ -1213,7 +1227,6 @@ fun SearchPanel(
     onAddPinnedShortcut: (String, String) -> Unit,
     onAddPinnedAtSlot: (String, String, Int) -> Unit,
     onAssignSlot: (String, Int) -> Unit,
-    onExpand: () -> Unit,
     onOpenSettings: () -> Unit,
     onClose: () -> Unit
 ) {
@@ -1226,17 +1239,8 @@ fun SearchPanel(
     val pagerState = rememberPagerState(pageCount = { pages.size })
     val scope = rememberCoroutineScope()
 
-    BackHandler {
-        when {
-            state.query.isNotBlank() -> onQueryChange("")
-            pagerState.currentPage != 0 -> scope.launch {
-                pagerState.animateScrollToPage(0)
-            }
-            else -> onClose()
-        }
-    }
-
     var shown by remember { mutableStateOf(false) }
+    var closing by remember { mutableStateOf(false) }
     var actionItem by remember { mutableStateOf<SearchItem?>(null) }
     var addKind by remember { mutableStateOf<PanelAddKind?>(null) }
     var addingSlot by remember { mutableStateOf<Int?>(null) }
@@ -1249,18 +1253,86 @@ fun SearchPanel(
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     val view = LocalView.current
-    val storeItem = remember(context) { PlayStore.homeItem(context) }
-    LaunchedEffect(Unit) { shown = true }
-    LaunchedEffect(pagerState.currentPage) {
-        if (pages[pagerState.currentPage] != PanelPage.MAIN) keyboard?.hide()
+
+    val dismissPanel: () -> Unit = {
+        if (!closing) {
+            closing = true
+            keyboard?.hide()
+            focusManager.clearFocus(force = true)
+            shown = false
+            scope.launch {
+                delay(PanelMotion.EXIT_DURATION_MS.toLong())
+                onClose()
+            }
+        }
     }
 
+    BackHandler {
+        when {
+            state.query.isNotBlank() -> onQueryChange("")
+            pagerState.currentPage != 0 -> scope.launch {
+                pagerState.animateScrollToPage(
+                    0,
+                    animationSpec = tween(PanelMotion.TAB_DURATION_MS, easing = PanelMotion.StandardEasing)
+                )
+            }
+            else -> dismissPanel()
+        }
+    }
+
+    // Alto real del teclado medido con el layout de la ventana. Los insets
+    // llegan en cero en varios fabricantes, así que no alcanzan por sí solos.
+    val imeHeight = rememberVisibleImeHeight()
+    val imeOpen = imeHeight > 0.dp
+    val savedImeDp = remember { Prefs.lastImeHeightDp(context) }
+    var awaitingInitialIme by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        shown = true
+        delay(650)
+        awaitingInitialIme = false
+    }
+    LaunchedEffect(imeHeight) {
+        if (imeHeight > 0.dp) awaitingInitialIme = false
+        val dpInt = imeHeight.value.roundToInt()
+        if (dpInt >= 120 && dpInt != savedImeDp) {
+            Prefs.setLastImeHeightDp(context, dpInt)
+        }
+    }
+    LaunchedEffect(pagerState.currentPage) {
+        if (pages[pagerState.currentPage] != PanelPage.MAIN) {
+            awaitingInitialIme = false
+            keyboard?.hide()
+        }
+    }
+
+    val playback by MediaControlService.playback.collectAsStateWithLifecycle()
+    val audioManager = remember(context) { context.getSystemService(AudioManager::class.java) }
+    var fallbackPlaying by remember { mutableStateOf(audioManager?.isMusicActive == true) }
+    val isPlaying = playback?.playing ?: fallbackPlaying
+
+    fun dispatchMediaKey(keyCode: Int) {
+        val manager = audioManager ?: return
+        val now = SystemClock.uptimeMillis()
+        runCatching {
+            manager.dispatchMediaKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0))
+            manager.dispatchMediaKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0))
+        }
+    }
+
+    val themeRevision = Prefs.themeRevision
+    val panelStyle = remember(themeRevision) { Prefs.panelStyle(context) }
+    val panelLight = remember(themeRevision) { Prefs.panelLightBackground(context) }
+    val themeSpec = remember(panelStyle, panelLight) { panelStyle.visualSpec(light = panelLight) }
+    val iconBrush = remember(themeSpec) { themeSpec.actionIconBrush }
+
     val scrimInteraction = remember { MutableInteractionSource() }
-    // El velo entra con el panel: antes aparecía negro de golpe y luego el
-    // panel, lo que se percibía como una pantalla negra lenta.
     val scrimAlpha by animateFloatAsState(
-        targetValue = if (shown) 0.18f else 0f,
-        animationSpec = tween(130),
+        targetValue = if (shown) 0.22f else 0f,
+        animationSpec = tween(
+            durationMillis = if (shown) PanelMotion.SCRIM_ENTER_MS else PanelMotion.SCRIM_EXIT_MS,
+            easing = if (shown) PanelMotion.EnterEasing else PanelMotion.ExitEasing
+        ),
         label = "scrim"
     )
 
@@ -1271,61 +1343,63 @@ fun SearchPanel(
             .clickable(
                 interactionSource = scrimInteraction,
                 indication = null,
-                onClick = onClose
+                onClick = dismissPanel
             )
     ) {
         AnimatedVisibility(
             visible = shown,
-            enter = slideInHorizontally(
-                animationSpec = tween(130),
-                initialOffsetX = { if (side == PanelSide.END) it else -it }
-            ) + fadeIn(tween(90)),
-            exit = slideOutHorizontally(
-                animationSpec = tween(110),
-                targetOffsetX = { if (side == PanelSide.END) it else -it }
-            ) + fadeOut(tween(80)),
+            enter = PanelMotion.sideEnter(side),
+            exit = PanelMotion.sideExit(side),
             modifier = Modifier.fillMaxSize()
         ) {
-            // Alto real del teclado medido con el layout de la ventana. Los
-            // insets llegan en cero en varios fabricantes, así que no
-            // alcanzan para reservar el espacio.
-            val imeHeight = rememberVisibleImeHeight()
-            val imeOpen = imeHeight > 0.dp
-
             BoxWithConstraints(
                 modifier = Modifier.fillMaxSize(),
-                contentAlignment = when {
-                    imeOpen && side == PanelSide.END -> Alignment.BottomEnd
-                    imeOpen -> Alignment.BottomStart
-                    side == PanelSide.END -> Alignment.CenterEnd
-                    else -> Alignment.CenterStart
-                }
+                contentAlignment = if (side == PanelSide.END) Alignment.BottomEnd else Alignment.BottomStart
             ) {
                 val panelWidth = minOf(maxWidth * 0.58f, 372.dp)
-                val panelHeight = Prefs.panelHeight(LocalContext.current)
-                val statusBarTop = with(LocalDensity.current) { WindowInsets.statusBars.getTop(this).toDp() }
+                val panelHeight = Prefs.panelHeight(context)
+                val density = LocalDensity.current
+                val statusBarTop = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
+                val navBarBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
                 val topSafeMargin = maxOf(statusBarTop, 24.dp) + 8.dp
                 val imeBottomGap = 6.dp
-                // Al abrir el teclado el panel se acorta y se acopla al contenido
-                // visible justo encima del teclado, sin dejar espacio vacío arriba.
-                val maxImePanelHeight = (maxHeight - imeHeight - topSafeMargin - imeBottomGap).coerceAtLeast(140.dp)
+                val referenceImeHeight = when {
+                    imeOpen -> imeHeight
+                    savedImeDp >= 120 -> savedImeDp.dp
+                    else -> maxHeight * 0.39f
+                }
+                // El panel mantiene siempre el tamaño corto y compacto del modo teclado;
+                // si hay más iconos, se desplaza suavemente con scroll vertical.
+                val availableAboveIme = (maxHeight - referenceImeHeight - topSafeMargin - imeBottomGap)
+                    .coerceAtLeast(180.dp)
+                val compactMaxHeight = minOf(availableAboveIme, maxHeight * panelHeight)
+                    .coerceAtLeast(180.dp)
+                val targetBottomPadding = when {
+                    imeOpen -> imeHeight + imeBottomGap
+                    awaitingInitialIme -> referenceImeHeight + imeBottomGap
+                    else -> ((maxHeight - compactMaxHeight) / 2f).coerceAtLeast(navBarBottom + 16.dp)
+                }
+                val animatedBottomPadding by animateDpAsState(
+                    targetValue = targetBottomPadding,
+                    animationSpec = tween(PanelMotion.LAYOUT_DURATION_MS, easing = PanelMotion.StandardEasing),
+                    label = "panelBottomOffset"
+                )
                 val currentPage = pages.getOrNull(pagerState.currentPage)
-                val fitToContent = imeOpen && (state.query.isNotBlank() || currentPage == PanelPage.MAIN)
+                val fitToContent = state.query.isNotBlank() || currentPage == PanelPage.MAIN
 
                 PanelSurface(
                     wrapHeight = fitToContent,
                     modifier = Modifier
-                        .then(if (imeOpen) Modifier.padding(bottom = imeHeight + imeBottomGap) else Modifier)
+                        .padding(bottom = animatedBottomPadding)
                         .width(panelWidth)
                         .padding(horizontal = 8.dp)
                         .then(
-                            when {
-                                fitToContent -> Modifier.heightIn(max = maxImePanelHeight)
-                                imeOpen -> Modifier.height(maxImePanelHeight)
-                                else -> Modifier.fillMaxHeight(panelHeight)
-                            }
+                            if (fitToContent) Modifier.heightIn(min = 128.dp, max = compactMaxHeight)
+                            else Modifier.height(compactMaxHeight)
                         )
-                        .animateContentSize(animationSpec = tween(150))
+                        .animateContentSize(
+                            animationSpec = tween(PanelMotion.LAYOUT_DURATION_MS, easing = PanelMotion.StandardEasing)
+                        )
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
@@ -1335,7 +1409,7 @@ fun SearchPanel(
                     Column(
                         modifier = Modifier
                             .then(if (fitToContent) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
-                            .padding(top = if (fitToContent) 10.dp else 0.dp)
+                            .padding(top = if (fitToContent) 10.dp else 4.dp)
                             .padding(horizontal = 6.dp)
                     ) {
                         SearchField(
@@ -1353,7 +1427,7 @@ fun SearchPanel(
                             showSectionHeaders = false, showShortcutsNote = false,
                             showTileLabels = panelShowLabels, gridColumns = panelColumns,
                             resultSide = side, bottomAnchored = true, tileIconScale = panelIconScale,
-                            bottomContentPaddingDp = if (fitToContent) 4 else 20,
+                            bottomContentPaddingDp = 4,
                             listMode = true, wrapHeight = fitToContent
                         ) else HorizontalPager(
                             state = pagerState,
@@ -1367,9 +1441,9 @@ fun SearchPanel(
                                     val distance = abs(
                                         (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
                                     ).coerceIn(0f, 1f)
-                                    alpha = 1f - distance * 0.45f
-                                    scaleX = 1f - distance * 0.06f
-                                    scaleY = 1f - distance * 0.06f
+                                    alpha = 1f - distance * 0.40f
+                                    scaleX = 1f - distance * 0.04f
+                                    scaleY = 1f - distance * 0.04f
                                     shape = RoundedCornerShape(22.dp)
                                     clip = true
                                 }
@@ -1394,7 +1468,7 @@ fun SearchPanel(
                                         showLabels = panelShowLabels,
                                         onWidgetGesture = { item ->
                                             EdgePanelService.showWidget(context, item.id)
-                                            onClose()
+                                            dismissPanel()
                                         },
                                         wrapHeight = wrapPage
                                     )
@@ -1435,41 +1509,133 @@ fun SearchPanel(
                             }
                             }
                         }
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            val iconBrush = remember {
-                                Brush.linearGradient(
-                                    listOf(Color(0xFF6FE3FF), Color(0xFF9C8CFF), Color(0xFFFF8FC7))
-                                )
-                            }
-                            IconButton(onClick = { launchPanelItem(storeItem) }, modifier = Modifier.weight(1f)) {
-                                ItemIcon(storeItem, 20.dp)
-                            }
-                            IconButton(onClick = onExpand, modifier = Modifier.weight(1f)) {
-                                Icon(
-                                    Icons.Filled.OpenInFull, "Abrir Nexo completo",
-                                    Modifier.size(20.dp).gradientTint(iconBrush), tint = Color.White
-                                )
-                            }
-                            IconButton(onClick = {
-                                if (view.isImeVisible()) {
-                                    keyboard?.hide()
-                                    focusManager.clearFocus(force = true)
-                                } else scope.launch {
-                                    val main = pages.indexOf(PanelPage.MAIN)
-                                    if (main >= 0) pagerState.scrollToPage(main)
-                                    searchFocus.requestFocus()
-                                    delay(120)
-                                    keyboard?.show()
+
+                        HorizontalDivider(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            thickness = 0.5.dp,
+                            color = themeSpec.outlineVariant.copy(alpha = 0.28f)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val activePillColor = themeSpec.primary.copy(alpha = 0.16f)
+
+                            IconButton(
+                                onClick = {
+                                    Haptics.perform(context)
+                                    val current = playback
+                                    if (current != null) {
+                                        runCatching {
+                                            if (current.playing) current.controller.transportControls.pause()
+                                            else current.controller.transportControls.play()
+                                        }.onFailure {
+                                            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+                                        }
+                                    } else {
+                                        fallbackPlaying = !fallbackPlaying
+                                        dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isPlaying) activePillColor else Color.Transparent),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    AnimatedContent(
+                                        targetState = isPlaying,
+                                        transitionSpec = {
+                                            fadeIn(tween(140, easing = PanelMotion.StandardEasing)) togetherWith
+                                                fadeOut(tween(110, easing = PanelMotion.StandardEasing))
+                                        },
+                                        label = "playPauseIcon"
+                                    ) { playing ->
+                                        Icon(
+                                            imageVector = if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                                            contentDescription = if (playing) "Pausar música" else "Reproducir música",
+                                            modifier = Modifier.size(21.dp).gradientTint(iconBrush),
+                                            tint = Color.White
+                                        )
+                                    }
                                 }
-                            }, modifier = Modifier.weight(1f)) {
-                                val imeVisible = view.isImeVisible()
-                                Icon(painterResource(R.drawable.ic_keyboard),
-                                    if (imeVisible) "Ocultar teclado" else "Mostrar teclado",
-                                    Modifier.size(20.dp).gradientTint(iconBrush), tint = Color.White)
                             }
-                            IconButton(onClick = onOpenSettings, modifier = Modifier.weight(1f)) {
-                                Icon(Icons.Filled.Settings, "Abrir ajustes de Nexo",
-                                    Modifier.size(20.dp).gradientTint(iconBrush), tint = Color.White)
+
+                            IconButton(
+                                onClick = {
+                                    Haptics.perform(context)
+                                    val current = playback
+                                    if (current != null) {
+                                        runCatching { current.controller.transportControls.skipToNext() }
+                                            .onFailure { dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT) }
+                                    } else {
+                                        dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT)
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.SkipNext,
+                                    contentDescription = "Siguiente canción",
+                                    modifier = Modifier.size(22.dp).gradientTint(iconBrush),
+                                    tint = Color.White
+                                )
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    Haptics.perform(context)
+                                    if (imeOpen || view.isImeVisible()) {
+                                        awaitingInitialIme = false
+                                        keyboard?.hide()
+                                        focusManager.clearFocus(force = true)
+                                    } else scope.launch {
+                                        val main = pages.indexOf(PanelPage.MAIN)
+                                        if (main >= 0) {
+                                            pagerState.animateScrollToPage(
+                                                main,
+                                                animationSpec = tween(PanelMotion.TAB_DURATION_MS, easing = PanelMotion.StandardEasing)
+                                            )
+                                        }
+                                        searchFocus.requestFocus()
+                                        delay(90)
+                                        keyboard?.show()
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(CircleShape)
+                                        .background(if (imeOpen) activePillColor else Color.Transparent),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_keyboard),
+                                        contentDescription = if (imeOpen) "Ocultar teclado" else "Mostrar teclado",
+                                        modifier = Modifier.size(20.dp).gradientTint(iconBrush),
+                                        tint = Color.White
+                                    )
+                                }
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    Haptics.perform(context)
+                                    onOpenSettings()
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Settings,
+                                    contentDescription = "Abrir ajustes de Nexo",
+                                    modifier = Modifier.size(20.dp).gradientTint(iconBrush),
+                                    tint = Color.White
+                                )
                             }
                         }
                     }
@@ -2748,7 +2914,7 @@ private fun rememberVisibleImeHeight(): Dp {
 }
 
 /** Paints the icon with a gradient instead of a flat tint. */
-private fun Modifier.gradientTint(brush: Brush): Modifier = this
+internal fun Modifier.gradientTint(brush: Brush): Modifier = this
     .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
     .drawWithContent {
         drawContent()
