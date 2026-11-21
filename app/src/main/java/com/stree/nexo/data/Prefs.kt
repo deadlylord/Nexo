@@ -97,11 +97,20 @@ object Prefs {
         prefs(context).edit().putBoolean("animate_panel_icons", enabled).apply()
     }
 
+    fun panelWidth(context: Context): Float =
+        prefs(context).getFloat("panel_width", 0.58f).coerceIn(0.45f, 0.90f)
+
+    fun setPanelWidth(context: Context, value: Float) {
+        prefs(context).edit().putFloat("panel_width", value.coerceIn(0.45f, 0.90f)).apply()
+        themeRevision++
+    }
+
     fun panelHeight(context: Context): Float =
-        prefs(context).getFloat("panel_height", 0.52f).coerceIn(0.40f, 0.60f)
+        prefs(context).getFloat("panel_height", 0.52f).coerceIn(0.30f, 0.85f)
 
     fun setPanelHeight(context: Context, value: Float) {
-        prefs(context).edit().putFloat("panel_height", value.coerceIn(0.40f, 0.60f)).apply()
+        prefs(context).edit().putFloat("panel_height", value.coerceIn(0.30f, 0.85f)).apply()
+        themeRevision++
     }
 
     fun lastImeHeightDp(context: Context): Int =

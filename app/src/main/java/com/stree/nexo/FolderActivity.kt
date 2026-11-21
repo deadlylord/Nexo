@@ -17,13 +17,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -43,6 +44,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,6 +55,7 @@ import com.stree.nexo.data.PanelSide
 import com.stree.nexo.data.Prefs
 import com.stree.nexo.ui.PanelMotion
 import com.stree.nexo.ui.PanelSurface
+import com.stree.nexo.ui.computePanelSize
 import com.stree.nexo.ui.disableSystemTransitions
 import com.stree.nexo.ui.finishNoSystemAnimation
 import com.stree.nexo.ui.theme.NexoTheme
@@ -106,6 +109,7 @@ private fun FolderPopup(
     onDismiss: () -> Unit,
     onOpen: (FolderActivity.FolderApp) -> Unit
 ) {
+    val context = LocalContext.current
     var shown by remember { mutableStateOf(false) }
     var closing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -149,15 +153,16 @@ private fun FolderPopup(
             exit = PanelMotion.sideExit(side),
             modifier = Modifier.fillMaxSize()
         ) {
-            Box(
+            BoxWithConstraints(
                 Modifier.fillMaxSize(),
                 contentAlignment = if (side == PanelSide.END) Alignment.CenterEnd else Alignment.CenterStart
             ) {
+                val panelSize = computePanelSize(context, maxWidth, maxHeight)
                 PanelSurface(
                     modifier = Modifier
-                        .fillMaxWidth(0.68f)
-                        .fillMaxHeight(0.52f)
-                        .padding(horizontal = 10.dp)
+                        .width(panelSize.width)
+                        .height(panelSize.height)
+                        .padding(horizontal = 8.dp)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,

@@ -27,6 +27,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -171,6 +173,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -200,6 +203,7 @@ import com.stree.nexo.data.SearchUiState
 import com.stree.nexo.data.ResultSection
 import com.stree.nexo.data.PlayStore
 import com.stree.nexo.media.MediaControlService
+import com.stree.nexo.media.OpenMusicResult
 import com.stree.nexo.search.ItemLauncher
 import com.stree.nexo.search.WhatsAppLinks
 import com.stree.nexo.ui.theme.visualSpec
@@ -1336,6 +1340,80 @@ fun SearchPanel(
         label = "scrim"
     )
 
+    val togglePlayPause: () -> Unit = {
+        Haptics.perform(context)
+        val current = playback
+        if (current != null) {
+            runCatching {
+                if (current.playing) current.controller.transportControls.pause()
+                else current.controller.transportControls.play()
+            }.onFailure {
+                dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+            }
+        } else {
+            fallbackPlaying = !fallbackPlaying
+            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+        }
+    }
+
+    val openPlayingMusicApp: () -> Unit = {
+        Haptics.perform(context, strong = true)
+        when (MediaControlService.openPlayingApp(context)) {
+            OpenMusicResult.OPENED -> dismissPanel()
+            OpenMusicResult.PERMISSION_REQUIRED -> {
+                Toast.makeText(
+                    context,
+                    "Autoriza el acceso a notificaciones para abrir la app de música",
+                    Toast.LENGTH_LONG
+                ).show()
+                runCatching {
+                    context.startActivity(
+                        Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }
+                dismissPanel()
+            }
+            OpenMusicResult.NO_ACTIVE_APP -> {
+                Toast.makeText(
+                    context,
+                    "No hay ninguna app de música reproduciendo",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    val skipNextTrack: () -> Unit = {
+        Haptics.perform(context)
+        val current = playback
+        if (current != null) {
+            runCatching { current.controller.transportControls.skipToNext() }
+                .onFailure { dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT) }
+        } else {
+            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT)
+        }
+    }
+
+    val toggleKeyboard: () -> Unit = {
+        if (imeOpen || view.isImeVisible()) {
+            awaitingInitialIme = false
+            keyboard?.hide()
+            focusManager.clearFocus(force = true)
+        } else scope.launch {
+            val main = pages.indexOf(PanelPage.MAIN)
+            if (main >= 0 && pagerState.currentPage != main) {
+                pagerState.animateScrollToPage(
+                    main,
+                    animationSpec = tween(PanelMotion.TAB_DURATION_MS, easing = PanelMotion.StandardEasing)
+                )
+            }
+            searchFocus.requestFocus()
+            delay(90)
+            keyboard?.show()
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -1356,8 +1434,6 @@ fun SearchPanel(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = if (side == PanelSide.END) Alignment.BottomEnd else Alignment.BottomStart
             ) {
-                val panelWidth = minOf(maxWidth * 0.58f, 372.dp)
-                val panelHeight = Prefs.panelHeight(context)
                 val density = LocalDensity.current
                 val statusBarTop = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
                 val navBarBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
@@ -1368,273 +1444,185 @@ fun SearchPanel(
                     savedImeDp >= 120 -> savedImeDp.dp
                     else -> maxHeight * 0.39f
                 }
-                // El panel mantiene siempre el tamaño corto y compacto del modo teclado;
-                // si hay más iconos, se desplaza suavemente con scroll vertical.
                 val availableAboveIme = (maxHeight - referenceImeHeight - topSafeMargin - imeBottomGap)
                     .coerceAtLeast(180.dp)
-                val compactMaxHeight = minOf(availableAboveIme, maxHeight * panelHeight)
+                val availableFullScreen = (maxHeight - topSafeMargin - navBarBottom - 24.dp)
                     .coerceAtLeast(180.dp)
+                val keyboardSpaceActive = imeOpen || awaitingInitialIme
+                val maxAllowedHeight = if (keyboardSpaceActive) availableAboveIme else availableFullScreen
+                // Todos los paneles mantienen exactamente el mismo tamaño que el panel principal.
+                val panelSize = remember(themeRevision, maxWidth, maxHeight, maxAllowedHeight) {
+                    computePanelSize(
+                        context = context,
+                        maxWidth = maxWidth,
+                        maxHeight = maxHeight,
+                        maxAllowedHeight = maxAllowedHeight
+                    )
+                }
+                val animatedPanelHeight by animateDpAsState(
+                    targetValue = panelSize.height,
+                    animationSpec = tween(PanelMotion.LAYOUT_DURATION_MS, easing = PanelMotion.StandardEasing),
+                    label = "panelHeight"
+                )
                 val targetBottomPadding = when {
                     imeOpen -> imeHeight + imeBottomGap
                     awaitingInitialIme -> referenceImeHeight + imeBottomGap
-                    else -> ((maxHeight - compactMaxHeight) / 2f).coerceAtLeast(navBarBottom + 16.dp)
+                    else -> ((maxHeight - panelSize.height) / 2f).coerceAtLeast(navBarBottom + 16.dp)
                 }
                 val animatedBottomPadding by animateDpAsState(
                     targetValue = targetBottomPadding,
                     animationSpec = tween(PanelMotion.LAYOUT_DURATION_MS, easing = PanelMotion.StandardEasing),
                     label = "panelBottomOffset"
                 )
-                val currentPage = pages.getOrNull(pagerState.currentPage)
-                val fitToContent = state.query.isNotBlank() || currentPage == PanelPage.MAIN
 
-                PanelSurface(
-                    wrapHeight = fitToContent,
+                // Campo de búsqueda único y oculto fuera del carrusel para mantener
+                // el foco del teclado sin duplicarlo entre páginas.
+                SearchField(
+                    query = state.query,
+                    onQueryChange = onQueryChange,
+                    onSubmit = { submitSearch(context, state, launchPanelItem) },
+                    focusRequester = searchFocus,
+                    autoFocus = true,
+                    compact = true,
                     modifier = Modifier
-                        .padding(bottom = animatedBottomPadding)
-                        .width(panelWidth)
-                        .padding(horizontal = 8.dp)
-                        .then(
-                            if (fitToContent) Modifier.heightIn(min = 128.dp, max = compactMaxHeight)
-                            else Modifier.height(compactMaxHeight)
-                        )
-                        .animateContentSize(
-                            animationSpec = tween(PanelMotion.LAYOUT_DURATION_MS, easing = PanelMotion.StandardEasing)
-                        )
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = {}
-                        )
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .then(if (fitToContent) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
-                            .padding(top = if (fitToContent) 10.dp else 4.dp)
-                            .padding(horizontal = 6.dp)
-                    ) {
-                        SearchField(
-                            query = state.query, onQueryChange = onQueryChange,
-                            onSubmit = { submitSearch(context, state, launchPanelItem) },
-                            focusRequester = searchFocus, autoFocus = true, compact = true,
-                            modifier = Modifier.height(1.dp).graphicsLayer { alpha = 0f }
-                        )
+                        .size(1.dp)
+                        .graphicsLayer { alpha = 0f }
+                )
 
-                        if (state.query.isNotBlank()) SearchBody(
-                            state = state, onItemClick = launchPanelItem, onCallContact = onCallContact,
-                            onOpenFloating = onOpenFloating, onItemLongClick = { actionItem = it },
-                            onRequestContacts = onRequestContacts,
-                            modifier = Modifier.weight(1f, fill = !fitToContent),
-                            showSectionHeaders = false, showShortcutsNote = false,
-                            showTileLabels = panelShowLabels, gridColumns = panelColumns,
-                            resultSide = side, bottomAnchored = true, tileIconScale = panelIconScale,
-                            bottomContentPaddingDp = 4,
-                            listMode = true, wrapHeight = fitToContent
-                        ) else HorizontalPager(
-                            state = pagerState,
-                            modifier = Modifier.weight(1f, fill = !fitToContent),
-                            pageSpacing = 12.dp,
-                            verticalAlignment = if (fitToContent) Alignment.Bottom else Alignment.CenterVertically
-                        ) { page ->
-                            val wrapPage = fitToContent && pages[page] == PanelPage.MAIN
-                            Box(
-                                (if (wrapPage) Modifier.fillMaxWidth() else Modifier.fillMaxSize()).graphicsLayer {
-                                    val distance = abs(
-                                        (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
-                                    ).coerceIn(0f, 1f)
-                                    alpha = 1f - distance * 0.40f
-                                    scaleX = 1f - distance * 0.04f
-                                    scaleY = 1f - distance * 0.04f
-                                    shape = RoundedCornerShape(22.dp)
-                                    clip = true
-                                }
+                HorizontalPager(
+                    state = pagerState,
+                    userScrollEnabled = state.query.isBlank(),
+                    pageSpacing = 0.dp,
+                    modifier = Modifier
+                        .padding(bottom = (animatedBottomPadding - 4.dp).coerceAtLeast(0.dp))
+                        .width(panelSize.width)
+                        .height(animatedPanelHeight + 8.dp)
+                ) { page ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .panelCardTransition(pagerState, page, side)
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        PanelSurface(
+                            wrapHeight = false,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = {}
+                                )
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(top = 6.dp)
+                                    .padding(horizontal = 6.dp)
                             ) {
-                            when (pages[page]) {
-                                PanelPage.MAIN -> {
-                                    SearchPage(
+                                if (state.query.isNotBlank()) {
+                                    SearchBody(
                                         state = state,
-                                        side = side,
                                         onItemClick = launchPanelItem,
                                         onCallContact = onCallContact,
                                         onOpenFloating = onOpenFloating,
                                         onItemLongClick = { actionItem = it },
                                         onRequestContacts = onRequestContacts,
-                                        onAddRequest = { addKind = PanelAddKind.MENU },
-                                        onAddSlot = { addingSlot = it; addKind = PanelAddKind.MENU },
-                                        onMovePinned = onMovePinned,
-                                        onMovePinnedToSlot = onAssignSlot,
-                                        columns = panelColumns,
-                                        iconScale = panelIconScale,
-                                        spacingDp = panelSpacing,
-                                        showLabels = panelShowLabels,
-                                        onWidgetGesture = { item ->
-                                            EdgePanelService.showWidget(context, item.id)
-                                            dismissPanel()
-                                        },
-                                        wrapHeight = wrapPage
+                                        modifier = Modifier.weight(1f),
+                                        showSectionHeaders = false,
+                                        showShortcutsNote = false,
+                                        showTileLabels = panelShowLabels,
+                                        gridColumns = panelColumns,
+                                        resultSide = side,
+                                        bottomAnchored = true,
+                                        tileIconScale = panelIconScale,
+                                        bottomContentPaddingDp = 4,
+                                        listMode = true,
+                                        wrapHeight = false
                                     )
-                                }
+                                } else {
+                                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                                        when (pages[page]) {
+                                            PanelPage.MAIN -> {
+                                                SearchPage(
+                                                    state = state,
+                                                    side = side,
+                                                    onItemClick = launchPanelItem,
+                                                    onCallContact = onCallContact,
+                                                    onOpenFloating = onOpenFloating,
+                                                    onItemLongClick = { actionItem = it },
+                                                    onRequestContacts = onRequestContacts,
+                                                    onAddRequest = { addKind = PanelAddKind.MENU },
+                                                    onAddSlot = { addingSlot = it; addKind = PanelAddKind.MENU },
+                                                    onMovePinned = onMovePinned,
+                                                    onMovePinnedToSlot = onAssignSlot,
+                                                    columns = panelColumns,
+                                                    iconScale = panelIconScale,
+                                                    spacingDp = panelSpacing,
+                                                    showLabels = panelShowLabels,
+                                                    onWidgetGesture = { item ->
+                                                        EdgePanelService.showWidget(context, item.id)
+                                                        dismissPanel()
+                                                    },
+                                                    wrapHeight = false
+                                                )
+                                            }
 
-                                PanelPage.SETTINGS -> {
-                                    QuickSettingsPage(
-                                        state = state,
-                                        onItemClick = launchPanelItem,
-                                        onOpenSettings = onOpenSettings,
-                                        onOpenFloating = onOpenFloating,
-                                        onItemLongClick = { actionItem = it },
-                                        columns = panelColumns,
-                                        iconScale = panelIconScale,
-                                        showLabels = panelShowLabels
-                                    )
-                                }
+                                            PanelPage.SETTINGS -> {
+                                                QuickSettingsPage(
+                                                    state = state,
+                                                    onItemClick = launchPanelItem,
+                                                    onOpenSettings = onOpenSettings,
+                                                    onOpenFloating = onOpenFloating,
+                                                    onItemLongClick = { actionItem = it },
+                                                    columns = panelColumns,
+                                                    iconScale = panelIconScale,
+                                                    spacingDp = panelSpacing,
+                                                    showLabels = panelShowLabels
+                                                )
+                                            }
 
-                                PanelPage.APPS -> {
-                                    AllAppsPage(
-                                        state = state,
-                                        onItemClick = launchPanelItem,
-                                        onOpenFloating = onOpenFloating,
-                                        onItemLongClick = { actionItem = it }
-                                    )
-                                }
+                                            PanelPage.APPS -> {
+                                                AllAppsPage(
+                                                    state = state,
+                                                    onItemClick = launchPanelItem,
+                                                    onOpenFloating = onOpenFloating,
+                                                    onItemLongClick = { actionItem = it }
+                                                )
+                                            }
 
-                                PanelPage.CONTACTS -> {
-                                    ContactsPage(
-                                        state = state,
-                                        onContactActions = { actionItem = it },
-                                        onRequestContacts = onRequestContacts,
-                                        onCall = onCallContact,
-                                        onOpenWhatsApp = launchPanelItem
-                                    )
-                                }
-                                PanelPage.WIDGETS -> WidgetsPage(active = pagerState.currentPage == page)
-                            }
-                            }
-                        }
+                                            PanelPage.CONTACTS -> {
+                                                ContactsPage(
+                                                    state = state,
+                                                    onContactActions = { actionItem = it },
+                                                    onRequestContacts = onRequestContacts,
+                                                    onCall = onCallContact,
+                                                    onOpenWhatsApp = launchPanelItem
+                                                )
+                                            }
 
-                        HorizontalDivider(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                            thickness = 0.5.dp,
-                            color = themeSpec.outlineVariant.copy(alpha = 0.28f)
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            val activePillColor = themeSpec.primary.copy(alpha = 0.16f)
-
-                            IconButton(
-                                onClick = {
-                                    Haptics.perform(context)
-                                    val current = playback
-                                    if (current != null) {
-                                        runCatching {
-                                            if (current.playing) current.controller.transportControls.pause()
-                                            else current.controller.transportControls.play()
-                                        }.onFailure {
-                                            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+                                            PanelPage.WIDGETS -> WidgetsPage(active = pagerState.currentPage == page)
                                         }
-                                    } else {
-                                        fallbackPlaying = !fallbackPlaying
-                                        dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
-                                    }
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(34.dp)
-                                        .clip(CircleShape)
-                                        .background(if (isPlaying) activePillColor else Color.Transparent),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    AnimatedContent(
-                                        targetState = isPlaying,
-                                        transitionSpec = {
-                                            fadeIn(tween(140, easing = PanelMotion.StandardEasing)) togetherWith
-                                                fadeOut(tween(110, easing = PanelMotion.StandardEasing))
-                                        },
-                                        label = "playPauseIcon"
-                                    ) { playing ->
-                                        Icon(
-                                            imageVector = if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                                            contentDescription = if (playing) "Pausar música" else "Reproducir música",
-                                            modifier = Modifier.size(21.dp).gradientTint(iconBrush),
-                                            tint = Color.White
-                                        )
                                     }
                                 }
-                            }
 
-                            IconButton(
-                                onClick = {
-                                    Haptics.perform(context)
-                                    val current = playback
-                                    if (current != null) {
-                                        runCatching { current.controller.transportControls.skipToNext() }
-                                            .onFailure { dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT) }
-                                    } else {
-                                        dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT)
-                                    }
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.SkipNext,
-                                    contentDescription = "Siguiente canción",
-                                    modifier = Modifier.size(22.dp).gradientTint(iconBrush),
-                                    tint = Color.White
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                    thickness = 0.5.dp,
+                                    color = themeSpec.outlineVariant.copy(alpha = 0.28f)
                                 )
-                            }
-
-                            IconButton(
-                                onClick = {
-                                    Haptics.perform(context)
-                                    if (imeOpen || view.isImeVisible()) {
-                                        awaitingInitialIme = false
-                                        keyboard?.hide()
-                                        focusManager.clearFocus(force = true)
-                                    } else scope.launch {
-                                        val main = pages.indexOf(PanelPage.MAIN)
-                                        if (main >= 0) {
-                                            pagerState.animateScrollToPage(
-                                                main,
-                                                animationSpec = tween(PanelMotion.TAB_DURATION_MS, easing = PanelMotion.StandardEasing)
-                                            )
-                                        }
-                                        searchFocus.requestFocus()
-                                        delay(90)
-                                        keyboard?.show()
-                                    }
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(34.dp)
-                                        .clip(CircleShape)
-                                        .background(if (imeOpen) activePillColor else Color.Transparent),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_keyboard),
-                                        contentDescription = if (imeOpen) "Ocultar teclado" else "Mostrar teclado",
-                                        modifier = Modifier.size(20.dp).gradientTint(iconBrush),
-                                        tint = Color.White
-                                    )
-                                }
-                            }
-
-                            IconButton(
-                                onClick = {
-                                    Haptics.perform(context)
-                                    onOpenSettings()
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Settings,
-                                    contentDescription = "Abrir ajustes de Nexo",
-                                    modifier = Modifier.size(20.dp).gradientTint(iconBrush),
-                                    tint = Color.White
+                                PanelFooter(
+                                    isPlaying = isPlaying,
+                                    query = state.query,
+                                    imeOpen = imeOpen,
+                                    activePillColor = themeSpec.primary.copy(alpha = 0.16f),
+                                    iconBrush = iconBrush,
+                                    onTogglePlayPause = togglePlayPause,
+                                    onOpenMusicApp = openPlayingMusicApp,
+                                    onSkipNext = skipNextTrack,
+                                    onClearQuery = { onQueryChange("") },
+                                    onToggleKeyboard = toggleKeyboard,
+                                    onOpenSettings = onOpenSettings
                                 )
                             }
                         }
@@ -1702,6 +1690,156 @@ fun SearchPanel(
             },
             confirmButton = { TextButton(onClick = { openFolder = null }) { Text("Cerrar") } }
         )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PanelFooter(
+    isPlaying: Boolean,
+    query: String,
+    imeOpen: Boolean,
+    activePillColor: Color,
+    iconBrush: Brush,
+    onTogglePlayPause: () -> Unit,
+    onOpenMusicApp: () -> Unit,
+    onSkipNext: () -> Unit,
+    onClearQuery: () -> Unit,
+    onToggleKeyboard: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    val context = LocalContext.current
+    val hasQuery = query.isNotEmpty()
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(48.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .combinedClickable(
+                    role = Role.Button,
+                    onClickLabel = if (isPlaying) "Pausar música" else "Reproducir música",
+                    onClick = onTogglePlayPause,
+                    onDoubleClick = onOpenMusicApp
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(if (isPlaying) activePillColor else Color.Transparent),
+                contentAlignment = Alignment.Center
+            ) {
+                AnimatedContent(
+                    targetState = isPlaying,
+                    transitionSpec = {
+                        fadeIn(tween(140, easing = PanelMotion.StandardEasing)) togetherWith
+                            fadeOut(tween(110, easing = PanelMotion.StandardEasing))
+                    },
+                    label = "playPauseIcon"
+                ) { playing ->
+                    Icon(
+                        imageVector = if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = if (playing) "Pausar música" else "Reproducir música",
+                        modifier = Modifier
+                            .size(21.dp)
+                            .gradientTint(iconBrush),
+                        tint = Color.White
+                    )
+                }
+            }
+        }
+
+        IconButton(
+            onClick = onSkipNext,
+            modifier = Modifier.weight(1f)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.SkipNext,
+                contentDescription = "Siguiente canción",
+                modifier = Modifier
+                    .size(22.dp)
+                    .gradientTint(iconBrush),
+                tint = Color.White
+            )
+        }
+
+        IconButton(
+            onClick = {
+                Haptics.perform(context)
+                if (hasQuery) onClearQuery() else onToggleKeyboard()
+            },
+            modifier = Modifier.weight(1f)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(if (hasQuery || imeOpen) activePillColor else Color.Transparent),
+                contentAlignment = Alignment.Center
+            ) {
+                AnimatedContent(
+                    targetState = hasQuery,
+                    transitionSpec = {
+                        (fadeIn(tween(140, easing = PanelMotion.StandardEasing)) +
+                            scaleIn(
+                                initialScale = 0.82f,
+                                animationSpec = tween(140, easing = PanelMotion.StandardEasing)
+                            )) togetherWith
+                            (fadeOut(tween(110, easing = PanelMotion.StandardEasing)) +
+                                scaleOut(
+                                    targetScale = 0.82f,
+                                    animationSpec = tween(110, easing = PanelMotion.StandardEasing)
+                                ))
+                    },
+                    label = "keyboardOrClearIcon"
+                ) { showClear ->
+                    if (showClear) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Borrar búsqueda",
+                            modifier = Modifier
+                                .size(20.dp)
+                                .gradientTint(iconBrush),
+                            tint = Color.White
+                        )
+                    } else {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_keyboard),
+                            contentDescription = if (imeOpen) "Ocultar teclado" else "Mostrar teclado",
+                            modifier = Modifier
+                                .size(20.dp)
+                                .gradientTint(iconBrush),
+                            tint = Color.White
+                        )
+                    }
+                }
+            }
+        }
+
+        IconButton(
+            onClick = {
+                Haptics.perform(context)
+                onOpenSettings()
+            },
+            modifier = Modifier.weight(1f)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Settings,
+                contentDescription = "Abrir ajustes de Nexo",
+                modifier = Modifier
+                    .size(20.dp)
+                    .gradientTint(iconBrush),
+                tint = Color.White
+            )
+        }
     }
 }
 
@@ -2326,7 +2464,7 @@ private fun AppGridTile(
     val widget = WidgetStore.get(context, app.id)
     Column(
         modifier = Modifier
-            .width(64.dp)
+            .fillMaxWidth()
             .then(if (widget != null) Modifier.pointerInput(app.id, widget.id) {
                 var movement = 0f
                 detectVerticalDragGestures(onDragStart = { movement = 0f }, onVerticalDrag = { change, amount ->

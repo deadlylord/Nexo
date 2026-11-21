@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Remove
@@ -114,6 +115,7 @@ import com.stree.nexo.data.PanelSide
 import com.stree.nexo.data.PanelStyle
 import com.stree.nexo.data.Prefs
 import com.stree.nexo.data.UsageStore
+import com.stree.nexo.media.MediaControlService
 import com.stree.nexo.panel.EdgePanelService
 import com.stree.nexo.ui.theme.PanelTheme
 import com.stree.nexo.ui.theme.visualSpec
@@ -161,6 +163,7 @@ fun SettingsScreen(
             ?.isIgnoringBatteryOptimizations(context.packageName) == true
     }
     val usageGranted = remember(resumeTick) { UsageStore(context).hasUsageAccess() }
+    val mediaAccessGranted = remember(resumeTick) { MediaControlService.isAuthorized(context) }
 
     var activeFilter by remember { mutableStateOf(SettingsSectionFilter.ALL) }
 
@@ -272,6 +275,47 @@ fun SettingsScreen(
                             )
                             Spacer(Modifier.width(8.dp))
                             Text(if (usageGranted) "Acceso al uso concedido" else "Autorizar acceso al uso")
+                        }
+                    }
+                }
+            }
+
+            item {
+                SettingsSectionCard(
+                    title = "Control multimedia",
+                    subtitle = "Doble toque para abrir la app de música en reproducción",
+                    icon = Icons.Filled.MusicNote,
+                    badgeText = if (mediaAccessGranted) "Activo" else "Opcional",
+                    badgeActive = mediaAccessGranted
+                ) {
+                    Text(
+                        text = "Autoriza el acceso a notificaciones para detectar qué app está reproduciendo música y abrirla directamente al dar doble toque en el botón Reproducir/Pausar del panel.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = {
+                                runCatching {
+                                    context.startActivity(
+                                        android.content.Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                                    )
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = if (mediaAccessGranted) Icons.Filled.CheckCircle else Icons.Filled.MusicNote,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(if (mediaAccessGranted) "Acceso multimedia concedido" else "Autorizar acceso multimedia")
                         }
                     }
                 }
@@ -691,6 +735,7 @@ private fun PermissionStatusChip(
 private fun PanelAppearanceCard() {
     val context = LocalContext.current
     var style by remember { mutableStateOf(Prefs.panelStyle(context)) }
+    var width by remember { mutableFloatStateOf(Prefs.panelWidth(context)) }
     var height by remember { mutableFloatStateOf(Prefs.panelHeight(context)) }
     var iconScale by remember { mutableFloatStateOf(Prefs.panelIconScale(context)) }
     var columns by remember { mutableIntStateOf(Prefs.panelColumns(context)) }
@@ -706,7 +751,9 @@ private fun PanelAppearanceCard() {
         spacing = spacing.roundToInt(),
         iconScale = iconScale,
         labels = showLabels,
-        light = lightBackground
+        light = lightBackground,
+        width = width,
+        height = height
     )
 
     SettingsSectionCard(
@@ -887,12 +934,31 @@ private fun PanelAppearanceCard() {
 
             Spacer(Modifier.height(14.dp))
 
-            LabeledSlider(
+            Text(
+                text = "TAMAÑO DEL PANEL (APLICADO A TODOS LOS PANELES)",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                letterSpacing = 0.8.sp
+            )
+            Spacer(Modifier.height(4.dp))
+
+            SteppedSlider(
+                label = "Ancho del panel",
+                valueText = "${(width * 100).roundToInt()} %",
+                value = width,
+                valueRange = 0.45f..0.90f,
+                stepAmount = 0.02f,
+                onValueChange = { width = it },
+                onValueChangeFinished = { Prefs.setPanelWidth(context, width) }
+            )
+
+            SteppedSlider(
                 label = "Altura del panel",
                 valueText = "${(height * 100).roundToInt()} %",
                 value = height,
-                valueRange = 0.40f..0.60f,
-                steps = 9,
+                valueRange = 0.30f..0.85f,
+                stepAmount = 0.02f,
                 onValueChange = { height = it },
                 onValueChangeFinished = { Prefs.setPanelHeight(context, height) }
             )
@@ -1005,7 +1071,9 @@ private data class PanelPreviewConfig(
     val spacing: Int,
     val iconScale: Float,
     val labels: Boolean,
-    val light: Boolean
+    val light: Boolean,
+    val width: Float,
+    val height: Float
 )
 
 /** Vista previa en vivo del panel lateral con su acabado real multicapa. */
@@ -1021,6 +1089,16 @@ private fun PanelPreviewCard(config: PanelPreviewConfig) {
         animationSpec = tween(180),
         label = "preview-spacing"
     )
+    val animatedWidthFraction by animateFloatAsState(
+        targetValue = (0.58f + ((config.width - 0.45f) / 0.45f) * 0.42f).coerceIn(0.58f, 1f),
+        animationSpec = tween(180),
+        label = "preview-width"
+    )
+    val animatedHeight by animateDpAsState(
+        targetValue = (146f + ((config.height - 0.30f) / 0.55f) * 96f).coerceIn(146f, 242f).dp,
+        animationSpec = tween(180),
+        label = "preview-height"
+    )
     AnimatedContent(
         targetState = Triple(config.style, config.columns, config.labels to config.light),
         transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
@@ -1031,35 +1109,40 @@ private fun PanelPreviewCard(config: PanelPreviewConfig) {
         val (previewLabels, previewLight) = target.third
         val spec = previewStyle.visualSpec(light = previewLight)
         PanelTheme(previewStyle, lightOverride = previewLight) {
-            PanelSurface(
-                styleOverride = previewStyle,
-                lightOverride = previewLight,
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 8.dp)
-                    .height(194.dp)
+                    .padding(top = 8.dp),
+                contentAlignment = Alignment.CenterEnd
             ) {
-                Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 10.dp)) {
-                    // Cabecera simulada del panel
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            Modifier
-                                .width(64.dp)
-                                .height(7.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(spec.primary.copy(alpha = 0.55f))
-                        )
-                        Spacer(Modifier.weight(1f))
-                        Text(
-                            text = "VISTA PREVIA",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = spec.onSurfaceVariant.copy(alpha = 0.75f),
-                            fontSize = 10.sp
-                        )
-                    }
+                PanelSurface(
+                    styleOverride = previewStyle,
+                    lightOverride = previewLight,
+                    modifier = Modifier
+                        .fillMaxWidth(animatedWidthFraction)
+                        .height(animatedHeight)
+                ) {
+                    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 10.dp)) {
+                        // Cabecera simulada del panel
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                Modifier
+                                    .width(54.dp)
+                                    .height(7.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(spec.primary.copy(alpha = 0.55f))
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                text = "${(config.width * 100).roundToInt()}% × ${(config.height * 100).roundToInt()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = spec.onSurfaceVariant.copy(alpha = 0.78f),
+                                fontSize = 10.sp
+                            )
+                        }
                     Spacer(Modifier.height(10.dp))
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(previewColumns),
@@ -1136,6 +1219,7 @@ private fun PanelPreviewCard(config: PanelPreviewConfig) {
                         }
                     }
                 }
+            }
             }
         }
     }

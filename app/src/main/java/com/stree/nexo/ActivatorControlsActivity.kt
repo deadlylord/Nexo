@@ -7,7 +7,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -35,8 +34,10 @@ import com.stree.nexo.panel.EdgePanelService
 import com.stree.nexo.ui.ControlPanelPage
 import com.stree.nexo.ui.PanelMotion
 import com.stree.nexo.ui.PanelSurface
+import com.stree.nexo.ui.computePanelSize
 import com.stree.nexo.ui.disableSystemTransitions
 import com.stree.nexo.ui.finishNoSystemAnimation
+import com.stree.nexo.ui.panelCardTransition
 import com.stree.nexo.ui.theme.NexoTheme
 import com.stree.nexo.ui.theme.PanelTheme
 import kotlinx.coroutines.delay
@@ -105,49 +106,60 @@ class ActivatorControlsActivity : ComponentActivity() {
                                 modifier = Modifier.fillMaxSize(),
                                 contentAlignment = if (side == PanelSide.END) Alignment.CenterEnd else Alignment.CenterStart
                             ) {
-                                val width = minOf(maxWidth * .82f, 300.dp)
-                                val contentHeight = when (modes[pager.currentPage]) {
-                                    "brightness" -> 220.dp
-                                    "volume" -> 340.dp
-                                    else -> 300.dp
-                                }
-                                val height = minOf(maxHeight - 24.dp, 480.dp, contentHeight + if (modes.size > 1) 48.dp else 0.dp)
-                                PanelSurface(
-                                    Modifier
-                                        .width(width)
-                                        .height(height)
-                                        .animateContentSize(
-                                            animationSpec = tween(PanelMotion.LAYOUT_DURATION_MS, easing = PanelMotion.StandardEasing)
-                                        )
-                                        .padding(12.dp)
-                                        .clickable(
-                                            interactionSource = remember { MutableInteractionSource() },
-                                            indication = null,
-                                            onClick = {}
-                                        )
-                                ) {
-                                    HorizontalPager(pager, modifier = Modifier.weight(1f)) { page ->
-                                        ControlPanelPage(modes[page])
-                                    }
-                                    if (modes.size > 1) Row(Modifier.fillMaxWidth()) {
-                                        listOf("Brillo", "Audio", "Silencio").forEachIndexed { index, label ->
-                                            TextButton(
-                                                onClick = {
-                                                    scope.launch {
-                                                        pager.animateScrollToPage(
-                                                            index,
-                                                            animationSpec = tween(PanelMotion.TAB_DURATION_MS, easing = PanelMotion.StandardEasing)
+                                val panelSize = computePanelSize(this@ActivatorControlsActivity, maxWidth, maxHeight)
+                                HorizontalPager(
+                                    state = pager,
+                                    pageSpacing = 0.dp,
+                                    modifier = Modifier
+                                        .width(panelSize.width)
+                                        .height(panelSize.height + 8.dp)
+                                ) { page ->
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .panelCardTransition(pager, page, side)
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        PanelSurface(
+                                            Modifier
+                                                .fillMaxSize()
+                                                .clickable(
+                                                    interactionSource = remember { MutableInteractionSource() },
+                                                    indication = null,
+                                                    onClick = {}
+                                                )
+                                        ) {
+                                            Box(Modifier.weight(1f).fillMaxWidth()) {
+                                                ControlPanelPage(modes[page])
+                                            }
+                                            if (modes.size > 1) Row(Modifier.fillMaxWidth()) {
+                                                listOf("Brillo", "Audio", "Silencio").forEachIndexed { index, label ->
+                                                    TextButton(
+                                                        onClick = {
+                                                            scope.launch {
+                                                                pager.animateScrollToPage(
+                                                                    index,
+                                                                    animationSpec = tween(
+                                                                        PanelMotion.TAB_DURATION_MS,
+                                                                        easing = PanelMotion.StandardEasing
+                                                                    )
+                                                                )
+                                                            }
+                                                        },
+                                                        modifier = Modifier.weight(1f)
+                                                    ) {
+                                                        Text(
+                                                            label,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            maxLines = 1,
+                                                            color = if (pager.currentPage == index) {
+                                                                MaterialTheme.colorScheme.primary
+                                                            } else {
+                                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                                            }
                                                         )
                                                     }
-                                                },
-                                                modifier = Modifier.weight(1f)
-                                            ) {
-                                                Text(
-                                                    label,
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    maxLines = 1,
-                                                    color = if (pager.currentPage == index) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
+                                                }
                                             }
                                         }
                                     }
