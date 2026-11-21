@@ -18,6 +18,7 @@ import android.view.ViewTreeObserver
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -49,6 +50,7 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -425,19 +427,22 @@ fun SearchBody(
     onMovePinnedToSlot: ((String, Int) -> Unit)? = null,
     centerItems: Boolean = false,
     bottomContentPaddingDp: Int = 20,
-    listMode: Boolean = false
+    listMode: Boolean = false,
+    wrapHeight: Boolean = false
 ) {
     when {
         state.loading && state.allItems.isEmpty() -> {
-            Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(
+                if (wrapHeight) modifier.fillMaxWidth().padding(24.dp) else modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
                 CircularProgressIndicator()
             }
         }
 
         state.error != null -> {
             Box(
-                modifier
-                    .fillMaxSize()
+                (if (wrapHeight) modifier.fillMaxWidth() else modifier.fillMaxSize())
                     .padding(24.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -504,7 +509,7 @@ fun SearchBody(
                 columns = GridCells.Fixed(gridColumns.coerceIn(3, 6)),
                 reverseLayout = bottomAnchored,
                 modifier = modifier
-                    .fillMaxSize()
+                    .then(if (wrapHeight) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
                     .then(
                         if (onEmptySpaceClick != null) {
                             Modifier.combinedClickable(
@@ -1281,34 +1286,46 @@ fun SearchPanel(
             ) + fadeOut(tween(80)),
             modifier = Modifier.fillMaxSize()
         ) {
+            // Alto real del teclado medido con el layout de la ventana. Los
+            // insets llegan en cero en varios fabricantes, así que no
+            // alcanzan para reservar el espacio.
+            val imeHeight = rememberVisibleImeHeight()
+            val imeOpen = imeHeight > 0.dp
+
             BoxWithConstraints(
                 modifier = Modifier.fillMaxSize(),
-                contentAlignment = if (side == PanelSide.END) {
-                    Alignment.CenterEnd
-                } else {
-                    Alignment.CenterStart
+                contentAlignment = when {
+                    imeOpen && side == PanelSide.END -> Alignment.BottomEnd
+                    imeOpen -> Alignment.BottomStart
+                    side == PanelSide.END -> Alignment.CenterEnd
+                    else -> Alignment.CenterStart
                 }
             ) {
                 val panelWidth = minOf(maxWidth * 0.58f, 372.dp)
                 val panelHeight = Prefs.panelHeight(LocalContext.current)
-                // Alto real del teclado medido con el layout de la ventana. Los
-                // insets llegan en cero en varios fabricantes, así que no
-                // alcanzan para reservar el espacio.
-                val imeHeight = rememberVisibleImeHeight()
-                val imeOpen = imeHeight > 0.dp
-                // Con el teclado abierto el panel crece una fila de iconos para
-                // que sigan visibles los anclados y los botones inferiores.
-                val effectiveHeight = if (imeOpen) 0.99f else panelHeight
-                // Solo cambia el espacio útil interior; el fondo del panel
-                // mantiene siempre su altura y posición originales.
-                val bottomMargin = maxHeight * ((1f - effectiveHeight) / 2f)
-                val keyboardOverlap = (imeHeight - bottomMargin).coerceAtLeast(0.dp)
+                val statusBarTop = with(LocalDensity.current) { WindowInsets.statusBars.getTop(this).toDp() }
+                val topSafeMargin = maxOf(statusBarTop, 24.dp) + 8.dp
+                val imeBottomGap = 6.dp
+                // Al abrir el teclado el panel se acorta y se acopla al contenido
+                // visible justo encima del teclado, sin dejar espacio vacío arriba.
+                val maxImePanelHeight = (maxHeight - imeHeight - topSafeMargin - imeBottomGap).coerceAtLeast(140.dp)
+                val currentPage = pages.getOrNull(pagerState.currentPage)
+                val fitToContent = imeOpen && (state.query.isNotBlank() || currentPage == PanelPage.MAIN)
 
                 PanelSurface(
+                    wrapHeight = fitToContent,
                     modifier = Modifier
-                        .fillMaxHeight(effectiveHeight)
+                        .then(if (imeOpen) Modifier.padding(bottom = imeHeight + imeBottomGap) else Modifier)
                         .width(panelWidth)
                         .padding(horizontal = 8.dp)
+                        .then(
+                            when {
+                                fitToContent -> Modifier.heightIn(max = maxImePanelHeight)
+                                imeOpen -> Modifier.height(maxImePanelHeight)
+                                else -> Modifier.fillMaxHeight(panelHeight)
+                            }
+                        )
+                        .animateContentSize(animationSpec = tween(150))
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
@@ -1317,8 +1334,8 @@ fun SearchPanel(
                 ) {
                     Column(
                         modifier = Modifier
-                            .fillMaxSize()
-                            .padding(bottom = keyboardOverlap)
+                            .then(if (fitToContent) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
+                            .padding(top = if (fitToContent) 10.dp else 0.dp)
                             .padding(horizontal = 6.dp)
                     ) {
                         SearchField(
@@ -1331,18 +1348,22 @@ fun SearchPanel(
                         if (state.query.isNotBlank()) SearchBody(
                             state = state, onItemClick = launchPanelItem, onCallContact = onCallContact,
                             onOpenFloating = onOpenFloating, onItemLongClick = { actionItem = it },
-                            onRequestContacts = onRequestContacts, modifier = Modifier.weight(1f),
+                            onRequestContacts = onRequestContacts,
+                            modifier = Modifier.weight(1f, fill = !fitToContent),
                             showSectionHeaders = false, showShortcutsNote = false,
                             showTileLabels = panelShowLabels, gridColumns = panelColumns,
                             resultSide = side, bottomAnchored = true, tileIconScale = panelIconScale,
-                            listMode = true
+                            bottomContentPaddingDp = if (fitToContent) 4 else 20,
+                            listMode = true, wrapHeight = fitToContent
                         ) else HorizontalPager(
                             state = pagerState,
-                            modifier = Modifier.weight(1f),
-                            pageSpacing = 12.dp
+                            modifier = Modifier.weight(1f, fill = !fitToContent),
+                            pageSpacing = 12.dp,
+                            verticalAlignment = if (fitToContent) Alignment.Bottom else Alignment.CenterVertically
                         ) { page ->
+                            val wrapPage = fitToContent && pages[page] == PanelPage.MAIN
                             Box(
-                                Modifier.fillMaxSize().graphicsLayer {
+                                (if (wrapPage) Modifier.fillMaxWidth() else Modifier.fillMaxSize()).graphicsLayer {
                                     val distance = abs(
                                         (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
                                     ).coerceIn(0f, 1f)
@@ -1374,7 +1395,8 @@ fun SearchPanel(
                                         onWidgetGesture = { item ->
                                             EdgePanelService.showWidget(context, item.id)
                                             onClose()
-                                        }
+                                        },
+                                        wrapHeight = wrapPage
                                     )
                                 }
 
@@ -1604,9 +1626,10 @@ private fun SearchPage(
     spacingDp: Int,
     showLabels: Boolean,
     onWidgetGesture: (SearchItem) -> Unit,
-    onMovePinnedToSlot: (String, Int) -> Unit
+    onMovePinnedToSlot: (String, Int) -> Unit,
+    wrapHeight: Boolean = false
 ) {
-    Column(Modifier.fillMaxSize()) {
+    Column(if (wrapHeight) Modifier.fillMaxWidth() else Modifier.fillMaxSize()) {
 
         if (state.query.isBlank() && !state.loading && state.error == null) {
             val pinned = state.sections.flatMap { it.items }.filter {
@@ -1614,18 +1637,24 @@ private fun SearchPage(
             }.distinctBy { it.id }
             // Recientes y "Para esta hora" viven en la página Ajustes; aquí solo
             // quedan los favoritos, con toda la altura disponible.
-            PanelSection("Favoritos", Modifier.weight(1f)) {
+            PanelSection(
+                "Favoritos",
+                if (wrapHeight) Modifier.fillMaxWidth() else Modifier.weight(1f)
+            ) {
                 SearchBody(
                     state = state.copy(sections = listOf(ResultSection("Ancladas", pinned))),
                     onItemClick = onItemClick, onCallContact = onCallContact,
                     onOpenFloating = onOpenFloating, onItemLongClick = onItemLongClick,
-                    onRequestContacts = onRequestContacts, modifier = Modifier.fillMaxSize(), bottomContentPaddingDp = 0,
+                    onRequestContacts = onRequestContacts,
+                    modifier = if (wrapHeight) Modifier.fillMaxWidth() else Modifier.fillMaxSize(),
+                    bottomContentPaddingDp = 0,
                     showSectionHeaders = false, showShortcutsNote = false, showTileLabels = showLabels,
                     resultSide = side, centerItems = false, bottomAnchored = true,
                     onEmptySpaceClick = onAddRequest,
                     onMovePinned = onMovePinned, onMovePinnedToSlot = onMovePinnedToSlot,
                     onAddSlot = onAddSlot, gridColumns = columns,
-                    tileIconScale = iconScale, tileSpacingDp = spacingDp, onWidgetGesture = onWidgetGesture
+                    tileIconScale = iconScale, tileSpacingDp = spacingDp,
+                    onWidgetGesture = onWidgetGesture, wrapHeight = wrapHeight
                 )
             }
         } else SearchBody(
@@ -1635,7 +1664,7 @@ private fun SearchPage(
             onOpenFloating = onOpenFloating,
             onItemLongClick = onItemLongClick,
             onRequestContacts = onRequestContacts,
-            modifier = Modifier.weight(1f),
+            modifier = if (wrapHeight) Modifier.fillMaxWidth() else Modifier.weight(1f),
             showPinHint = false,
             bottomAnchored = false,
             resultSide = side,
@@ -1650,7 +1679,8 @@ private fun SearchPage(
             tileIconScale = iconScale,
             tileSpacingDp = spacingDp,
             onAddSlot = onAddSlot,
-            onWidgetGesture = onWidgetGesture
+            onWidgetGesture = onWidgetGesture,
+            wrapHeight = wrapHeight
         )
 
     }

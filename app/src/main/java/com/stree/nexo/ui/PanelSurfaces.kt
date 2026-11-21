@@ -22,6 +22,7 @@ internal fun PanelSurface(
     modifier: Modifier = Modifier,
     styleOverride: PanelStyle? = null,
     lightOverride: Boolean? = null,
+    wrapHeight: Boolean = false,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val context = LocalContext.current
@@ -39,8 +40,7 @@ internal fun PanelSurface(
         shadowElevation = if (style == PanelStyle.GLASS || style == PanelStyle.NEON) 26.dp else 22.dp
     ) {
         Column(
-            Modifier
-                .fillMaxSize()
+            (if (wrapHeight) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
                 .background(spec.sheenBrush),
             content = content
         )
