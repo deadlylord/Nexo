@@ -1,5 +1,6 @@
 package com.stree.nexo.ui
 
+import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
@@ -28,10 +29,12 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.rememberScrollState
@@ -44,6 +47,7 @@ import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.History
@@ -67,6 +71,7 @@ import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.ViewCarousel
 import androidx.compose.material.icons.filled.Widgets
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -74,12 +79,15 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -88,6 +96,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -110,6 +119,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.stree.nexo.data.ActivatorStyle
+import com.stree.nexo.data.EdgeGesture
+import com.stree.nexo.data.EdgeGestureAction
 import com.stree.nexo.data.PanelPage
 import com.stree.nexo.data.PanelSide
 import com.stree.nexo.data.PanelStyle
@@ -119,6 +130,8 @@ import com.stree.nexo.media.MediaControlService
 import com.stree.nexo.panel.EdgePanelService
 import com.stree.nexo.ui.theme.PanelTheme
 import com.stree.nexo.ui.theme.visualSpec
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 private enum class SettingsSectionFilter(val label: String, val icon: ImageVector) {
@@ -790,6 +803,7 @@ private fun PanelAppearanceCard() {
                             onClick = {
                                 style = option
                                 Prefs.setPanelStyle(context, option)
+                                EdgePanelService.refresh(context)
                             }
                         )
                     }
@@ -840,6 +854,7 @@ private fun PanelAppearanceCard() {
             onCheckedChange = {
                 lightBackground = it
                 Prefs.setPanelLightBackground(context, it)
+                EdgePanelService.refresh(context)
             }
         )
 
@@ -1239,6 +1254,15 @@ private fun ActivationZoneCard(side: PanelSide) {
     var activatorStyle by remember { mutableStateOf(Prefs.activatorStyle(context)) }
     var activatorColor by remember { mutableIntStateOf(Prefs.activatorColor(context)) }
     var activatorOpacity by remember { mutableFloatStateOf(Prefs.activatorOpacity(context)) }
+    var syncTheme by remember { mutableStateOf(Prefs.activatorSyncTheme(context)) }
+    var pulseCopy by remember { mutableStateOf(Prefs.edgePulseOnCopy(context)) }
+    var pulseScreenshot by remember { mutableStateOf(Prefs.edgePulseOnScreenshot(context)) }
+    var pulseNotification by remember { mutableStateOf(Prefs.edgePulseOnNotification(context)) }
+
+    val themeSpec = remember(Prefs.themeRevision) {
+        Prefs.panelStyle(context).visualSpec(light = Prefs.panelLightBackground(context))
+    }
+    val previewColor = if (syncTheme) themeSpec.primary else Color(activatorColor)
 
     val screenHeightDp = context.resources.displayMetrics.run { heightPixels / density }.coerceAtLeast(640f)
     val screenWidthDp = context.resources.displayMetrics.run { widthPixels / density }.coerceAtLeast(360f)
@@ -1261,8 +1285,8 @@ private fun ActivationZoneCard(side: PanelSide) {
     }
 
     SettingsSectionCard(
-        title = "Área táctil y tirador del borde",
-        subtitle = "Calibración visual de la zona de toque, el margen de gesto Atrás y el indicador",
+        title = "Barra viva, gestos y tirador",
+        subtitle = "Aspecto del borde, animaciones en vivo y acciones personalizadas por gesto",
         icon = Icons.Filled.TouchApp,
         badgeText = "${width.roundToInt()}×${height.roundToInt()} dp",
         badgeActive = true
@@ -1280,7 +1304,7 @@ private fun ActivationZoneCard(side: PanelSide) {
                 indicatorWidthDp = indicatorWidth,
                 indicatorHeightDp = indicatorHeight,
                 activatorStyle = activatorStyle,
-                activatorColor = Color(activatorColor),
+                activatorColor = previewColor,
                 activatorOpacity = activatorOpacity,
                 onDragPosition = { newPos ->
                     position = newPos.coerceIn(-1f, 1f)
@@ -1364,13 +1388,25 @@ private fun ActivationZoneCard(side: PanelSide) {
                     }
                 }
             }
+        }
 
-            Spacer(Modifier.height(10.dp))
+        SwitchRow(
+            title = "Sincronizar color con el tema activo",
+            subtitle = "La barra adopta automáticamente el degradado del tema elegido en Nexo",
+            checked = syncTheme,
+            onCheckedChange = {
+                syncTheme = it
+                Prefs.setActivatorSyncTheme(context, it)
+                EdgePanelService.refresh(context)
+            }
+        )
 
-            // Paleta de color del tirador
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 2.dp)) {
+            // Paleta de color manual del tirador (tocar uno cambia a color manual)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .alpha(if (syncTheme) 0.52f else 1f)
                     .padding(vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -1386,12 +1422,14 @@ private fun ActivationZoneCard(side: PanelSide) {
                     0xFF333333
                 ).forEach { value ->
                     val colorInt = value.toInt()
-                    val selected = activatorColor == colorInt
+                    val selected = !syncTheme && activatorColor == colorInt
                     Surface(
                         modifier = Modifier
                             .size(32.dp)
                             .clickable {
+                                syncTheme = false
                                 activatorColor = colorInt
+                                Prefs.setActivatorSyncTheme(context, false)
                                 Prefs.setActivatorColor(context, colorInt)
                                 EdgePanelService.refresh(context)
                             },
@@ -1438,9 +1476,58 @@ private fun ActivationZoneCard(side: PanelSide) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
             Spacer(Modifier.height(12.dp))
 
-            // 2. Dimensiones del Área Táctil
+            // 2. Barra viva y avisos en tiempo real
             Text(
-                text = "2 · ZONA TÁCTIL (ÁREA DE ACCIÓN)",
+                text = "2 · BARRA VIVA Y ANIMACIONES DE AVISO",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                letterSpacing = 0.8.sp
+            )
+            Text(
+                text = "La barra se ilumina 4 segundos con onda luminosa; tócala durante el aviso para actuar al instante.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp)
+            )
+        }
+
+        SwitchRow(
+            title = "Animar al copiar texto",
+            subtitle = "Muestra pulso e icono de portapapeles; tocar abre acciones rápidas",
+            checked = pulseCopy,
+            onCheckedChange = {
+                pulseCopy = it
+                Prefs.setEdgePulseOnCopy(context, it)
+            }
+        )
+        SwitchRow(
+            title = "Animar con capturas de pantalla",
+            subtitle = "Se ilumina al tomar una captura para verla, compartirla o borrarla",
+            checked = pulseScreenshot,
+            onCheckedChange = {
+                pulseScreenshot = it
+                Prefs.setEdgePulseOnScreenshot(context, it)
+            }
+        )
+        SwitchRow(
+            title = "Animar con notificaciones",
+            subtitle = "Muestra el icono de la app que notifica y abre el aviso al tocar",
+            checked = pulseNotification,
+            onCheckedChange = {
+                pulseNotification = it
+                Prefs.setEdgePulseOnNotification(context, it)
+            }
+        )
+
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+            Spacer(Modifier.height(6.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
+            Spacer(Modifier.height(12.dp))
+
+            // 3. Dimensiones del Área Táctil
+            Text(
+                text = "3 · ZONA TÁCTIL (ÁREA DE ACCIÓN)",
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary,
@@ -1503,9 +1590,9 @@ private fun ActivationZoneCard(side: PanelSide) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
             Spacer(Modifier.height(12.dp))
 
-            // 3. Dimensiones del Indicador Visible
+            // 4. Dimensiones del Indicador Visible
             Text(
-                text = "3 · TAMAÑO DEL INDICADOR VISIBLE",
+                text = "4 · TAMAÑO DEL INDICADOR VISIBLE",
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary,
@@ -1542,16 +1629,8 @@ private fun ActivationZoneCard(side: PanelSide) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
             Spacer(Modifier.height(12.dp))
 
-            // 4. Guía visual de gestos del tirador
-            Text(
-                text = "GUÍA RÁPIDA DE GESTOS DEL TIRADOR",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
-                letterSpacing = 0.8.sp
-            )
-            Spacer(Modifier.height(8.dp))
-            GestureLegendGrid()
+            // 5. Gestos personalizables del tirador
+            GestureCustomizationSection()
             Spacer(Modifier.height(8.dp))
         }
     }
@@ -1982,62 +2061,367 @@ private fun PresetChip(label: String, onClick: () -> Unit) {
     }
 }
 
+private fun gestureIcon(gesture: EdgeGesture): ImageVector = when (gesture) {
+    EdgeGesture.SINGLE_TAP -> Icons.Filled.TouchApp
+    EdgeGesture.DOUBLE_TAP -> Icons.Filled.Tune
+    EdgeGesture.SWIPE_UP -> Icons.Filled.KeyboardArrowUp
+    EdgeGesture.SWIPE_DOWN -> Icons.Filled.KeyboardArrowDown
+    EdgeGesture.SWIPE_IN -> Icons.Filled.Layers
+    EdgeGesture.PULL_HOLD -> Icons.Filled.Gesture
+}
+
 @Composable
-private fun GestureLegendGrid() {
-    val gestures = listOf(
-        Triple(Icons.Filled.TouchApp, "Toque simple", "Abre el panel lateral"),
-        Triple(Icons.Filled.Tune, "Doble toque", "Silencio, Normal y ChatGPT"),
-        Triple(Icons.Filled.Brightness6, "Deslizar arriba", "Control rápido de brillo"),
-        Triple(Icons.Filled.SwipeVertical, "Deslizar abajo", "Control de volumen"),
-        Triple(Icons.Filled.Gesture, "Jalar y sostener", "Vuelve a la última app"),
-        Triple(Icons.Filled.Layers, "Deslizar desde borde", "Gesto Atrás nativo sobre la barra")
+private fun GestureCustomizationSection() {
+    val context = LocalContext.current
+    var revision by remember { mutableIntStateOf(0) }
+    var editingGesture by remember { mutableStateOf<EdgeGesture?>(null) }
+    var pickingAppFor by remember { mutableStateOf<EdgeGesture?>(null) }
+
+    val appLabels = remember(revision) {
+        val pm = context.packageManager
+        EdgeGesture.entries.associateWith { gesture ->
+            val pkg = Prefs.edgeGestureApp(context, gesture)
+            if (pkg.isNullOrBlank()) null
+            else runCatching {
+                pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+            }.getOrNull()
+        }
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = "5 · GESTOS PERSONALIZABLES",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            letterSpacing = 0.8.sp
+        )
+        TextButton(
+            onClick = {
+                EdgeGesture.entries.forEach { gesture ->
+                    Prefs.setEdgeGestureAction(context, gesture, gesture.defaultAction)
+                    Prefs.setEdgeGestureApp(context, gesture, null)
+                }
+                revision++
+            },
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+        ) {
+            Text(
+                text = "Restablecer",
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+    }
+    Text(
+        text = "Toca cualquier gesto para elegir qué acción ejecuta en Nexo o abrir una app directa.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(bottom = 8.dp)
     )
+
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        gestures.chunked(2).forEach { pair ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+        EdgeGesture.entries.forEach { gesture ->
+            val action = remember(revision) { Prefs.edgeGestureAction(context, gesture) }
+            val actionDisplay = if (action == EdgeGestureAction.LAUNCH_APP) {
+                val appName = appLabels[gesture]
+                if (appName != null) "Abrir $appName" else "Elegir app…"
+            } else {
+                action.label
+            }
+
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { editingGesture = gesture },
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.58f),
+                border = BorderStroke(
+                    0.8.dp,
+                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f)
+                )
             ) {
-                pair.forEach { (icon, title, desc) ->
-                    Surface(
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Icon(
+                            imageVector = gestureIcon(gesture),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = gesture.label,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = gesture.subtitle,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (action == EdgeGestureAction.NONE) {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        } else {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                        }
+                    ) {
+                        Text(
+                            text = actionDisplay,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (action == EdgeGestureAction.NONE) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(2.dp))
+                    Icon(
+                        imageVector = Icons.Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+    }
+
+    editingGesture?.let { gesture ->
+        val currentAction = remember(gesture, revision) { Prefs.edgeGestureAction(context, gesture) }
+        AlertDialog(
+            onDismissRequest = { editingGesture = null },
+            title = {
+                Text(
+                    text = gesture.label,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(EdgeGestureAction.entries) { option ->
+                        val selected = option == currentAction
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    if (option == EdgeGestureAction.LAUNCH_APP) {
+                                        editingGesture = null
+                                        pickingAppFor = gesture
+                                    } else {
+                                        Prefs.setEdgeGestureAction(context, gesture, option)
+                                        revision++
+                                        editingGesture = null
+                                    }
+                                },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                            } else {
+                                Color.Transparent
+                            }
                         ) {
-                            Icon(
-                                imageVector = icon,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Column(Modifier.weight(1f)) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        text = option.label,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (selected) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        }
+                                    )
+                                    Text(
+                                        text = option.description,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                if (selected) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Check,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { editingGesture = null }) {
+                    Text("Cerrar")
+                }
+            }
+        )
+    }
+
+    pickingAppFor?.let { gesture ->
+        EdgeAppPickerDialog(
+            gestureLabel = gesture.label,
+            selectedPackage = Prefs.edgeGestureApp(context, gesture),
+            onDismiss = { pickingAppFor = null },
+            onSelect = { pkg ->
+                Prefs.setEdgeGestureAction(context, gesture, EdgeGestureAction.LAUNCH_APP)
+                Prefs.setEdgeGestureApp(context, gesture, pkg)
+                revision++
+                pickingAppFor = null
+            }
+        )
+    }
+}
+
+@Composable
+private fun EdgeAppPickerDialog(
+    gestureLabel: String,
+    selectedPackage: String?,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit
+) {
+    val context = LocalContext.current
+    var query by remember { mutableStateOf("") }
+    var apps by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+
+    LaunchedEffect(Unit) {
+        apps = withContext(Dispatchers.IO) {
+            val pm = context.packageManager
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            pm.queryIntentActivities(intent, 0)
+                .mapNotNull { info ->
+                    val pkg = info.activityInfo?.packageName ?: return@mapNotNull null
+                    if (pkg == context.packageName) return@mapNotNull null
+                    val label = info.loadLabel(pm)?.toString()?.takeIf { it.isNotBlank() } ?: pkg
+                    pkg to label
+                }
+                .distinctBy { it.first }
+                .sortedBy { it.second.lowercase() }
+        }
+    }
+
+    val filtered = remember(apps, query) {
+        val q = query.trim().lowercase()
+        if (q.isEmpty()) apps
+        else apps.filter { (pkg, label) -> label.lowercase().contains(q) || pkg.lowercase().contains(q) }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "App para $gestureLabel",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Buscar aplicación…") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 300.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(filtered, key = { it.first }) { (pkg, label) ->
+                        val selected = pkg == selectedPackage
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelect(pkg) },
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                            } else {
+                                Color.Transparent
+                            }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
-                                    text = title,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold,
+                                    text = label,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
                                     maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
                                 )
-                                Text(
-                                    text = desc,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 10.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                if (selected) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Check,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancelar")
+            }
         }
-    }
+    )
 }
 
 @Composable

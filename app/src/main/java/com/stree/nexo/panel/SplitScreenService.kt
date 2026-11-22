@@ -37,9 +37,21 @@ class SplitScreenService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
+        if (event.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
+            val text = event.text.joinToString(" ").lowercase()
+            when {
+                "copiado" in text || "copied" in text || "portapapeles" in text || "clipboard" in text -> {
+                    EdgePanelService.notifyCopyDetected(applicationContext)
+                }
+                "captura" in text || "screenshot" in text -> {
+                    EdgePanelService.notifyScreenshotDetected(applicationContext)
+                }
+            }
+            return
+        }
         // Solo se usa el nombre del paquete y el tipo de evento para saber
         // cuándo la primera app ya tiene el foco. No se lee contenido.
-        if (event == null) return
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val expected = waitingFor ?: return
         if (event.packageName?.toString() != expected) return
@@ -202,8 +214,23 @@ class SplitScreenService : AccessibilityService() {
         private const val SECOND_DELAY_MS = 700L
         private var instance: SplitScreenService? = null
 
+        fun isRunning(): Boolean = instance != null
+
         fun performBack(): Boolean =
             runCatching { instance?.performGlobalAction(GLOBAL_ACTION_BACK) == true }.getOrDefault(false)
+
+        fun performHome(): Boolean =
+            runCatching { instance?.performGlobalAction(GLOBAL_ACTION_HOME) == true }.getOrDefault(false)
+
+        fun performRecents(): Boolean =
+            runCatching { instance?.performGlobalAction(GLOBAL_ACTION_RECENTS) == true }.getOrDefault(false)
+
+        fun performTakeScreenshot(): Boolean {
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.P) return false
+            return runCatching {
+                instance?.performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT) == true
+            }.getOrDefault(false)
+        }
 
         fun launch(context: Context, firstPackage: String, secondPackage: String): Boolean {
             val first = context.packageManager.getLaunchIntentForPackage(firstPackage) ?: return false

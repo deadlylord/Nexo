@@ -169,6 +169,51 @@ object Prefs {
         prefs(context).edit().putFloat("activator_opacity", opacity.coerceIn(0.25f, 1f)).apply()
     }
 
+    fun activatorSyncTheme(context: Context): Boolean =
+        prefs(context).getBoolean("activator_sync_theme", true)
+
+    fun setActivatorSyncTheme(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("activator_sync_theme", enabled).apply()
+        themeRevision++
+    }
+
+    fun edgePulseOnCopy(context: Context): Boolean =
+        prefs(context).getBoolean("edge_pulse_copy", true)
+
+    fun setEdgePulseOnCopy(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("edge_pulse_copy", enabled).apply()
+    }
+
+    fun edgePulseOnScreenshot(context: Context): Boolean =
+        prefs(context).getBoolean("edge_pulse_screenshot", true)
+
+    fun setEdgePulseOnScreenshot(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("edge_pulse_screenshot", enabled).apply()
+    }
+
+    fun edgePulseOnNotification(context: Context): Boolean =
+        prefs(context).getBoolean("edge_pulse_notification", true)
+
+    fun setEdgePulseOnNotification(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("edge_pulse_notification", enabled).apply()
+    }
+
+    fun edgeGestureAction(context: Context, gesture: EdgeGesture): EdgeGestureAction = runCatching {
+        val raw = prefs(context).getString("edge_gesture_${gesture.name}", gesture.defaultAction.name).orEmpty()
+        EdgeGestureAction.valueOf(raw)
+    }.getOrDefault(gesture.defaultAction)
+
+    fun setEdgeGestureAction(context: Context, gesture: EdgeGesture, action: EdgeGestureAction) {
+        prefs(context).edit().putString("edge_gesture_${gesture.name}", action.name).apply()
+    }
+
+    fun edgeGestureApp(context: Context, gesture: EdgeGesture): String? =
+        prefs(context).getString("edge_gesture_app_${gesture.name}", null)?.takeIf { it.isNotBlank() }
+
+    fun setEdgeGestureApp(context: Context, gesture: EdgeGesture, packageName: String?) {
+        prefs(context).edit().putString("edge_gesture_app_${gesture.name}", packageName).apply()
+    }
+
     fun setPanelIconScale(context: Context, value: Float) {
         prefs(context).edit().putFloat("panel_icon_scale", value.coerceIn(0.75f, 1.35f)).apply()
     }

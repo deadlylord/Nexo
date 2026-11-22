@@ -134,6 +134,41 @@ class MediaControlService : NotificationListenerService() {
         mutablePlayback.value = null
     }
 
+    override fun onNotificationPosted(sbn: android.service.notification.StatusBarNotification?) {
+        super.onNotificationPosted(sbn)
+        if (sbn == null) return
+        val pkg = sbn.packageName ?: return
+        if (pkg == packageName) return
+
+        val notif = sbn.notification ?: return
+        val flags = notif.flags
+        val title = notif.extras?.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString().orEmpty().lowercase()
+        val channel = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            notif.channelId.orEmpty().lowercase()
+        } else ""
+
+        // Detectar capturas de pantalla del sistema (Samsung, AOSP, MIUI, etc.)
+        if ("screenshot" in pkg.lowercase() || "screenshot" in channel || "captura" in title || "screenshot" in title) {
+            com.stree.nexo.panel.EdgePanelService.notifyScreenshotDetected(applicationContext)
+            return
+        }
+
+        // Ignorar servicios en curso, resúmenes de grupo o avisos del sistema silenciosos
+        val isOngoing = (flags and android.app.Notification.FLAG_ONGOING_EVENT) != 0 ||
+            (flags and android.app.Notification.FLAG_FOREGROUND_SERVICE) != 0 ||
+            (flags and android.app.Notification.FLAG_GROUP_SUMMARY) != 0
+        if (isOngoing || pkg == "android" || pkg == "com.android.systemui") return
+
+        val accent = notif.color.takeIf { it != 0 }
+        val pulse = com.stree.nexo.data.ClipboardHistoryStore.recordNotification(
+            context = applicationContext,
+            packageName = pkg,
+            accentColor = accent,
+            contentIntent = notif.contentIntent
+        )
+        com.stree.nexo.panel.EdgePanelService.notifyNotificationPulse(applicationContext, pulse)
+    }
+
     override fun onListenerDisconnected() {
         release()
         super.onListenerDisconnected()

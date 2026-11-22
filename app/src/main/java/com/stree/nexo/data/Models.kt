@@ -36,6 +36,33 @@ enum class ActivatorStyle(val label: String) {
     LINE("Línea"), PILL("Píldora"), CIRCLE("Círculo"), ICON("Icono")
 }
 
+enum class EdgeGesture(val label: String, val subtitle: String, val defaultAction: EdgeGestureAction) {
+    SINGLE_TAP("Toque simple", "Tocar la barra una vez", EdgeGestureAction.OPEN_PANEL),
+    DOUBLE_TAP("Doble toque", "Tocar dos veces rápido", EdgeGestureAction.OPEN_CONTROLS),
+    SWIPE_UP("Deslizar arriba", "Arrastrar hacia arriba", EdgeGestureAction.OPEN_BRIGHTNESS),
+    SWIPE_DOWN("Deslizar abajo", "Arrastrar hacia abajo", EdgeGestureAction.OPEN_VOLUME),
+    SWIPE_IN("Jalar hacia dentro", "Deslizar rápido desde el borde", EdgeGestureAction.SYSTEM_BACK),
+    PULL_HOLD("Jalar y sostener", "Jalar hacia dentro y mantener", EdgeGestureAction.LAST_APP)
+}
+
+enum class EdgeGestureAction(val label: String, val description: String) {
+    OPEN_PANEL("Panel principal", "Abre tus favoritos y buscador"),
+    OPEN_CONTROLS("Controles rápidos", "Silencio, temporizador y asistente"),
+    OPEN_BRIGHTNESS("Brillo", "Control rápido de brillo"),
+    OPEN_VOLUME("Volumen", "Control rápido de audio"),
+    TOGGLE_SILENT("Alternar silencio", "Pasa entre silencio y sonido normal"),
+    OPEN_CLIPBOARD("Portapapeles y captura", "Abre la tarjeta de texto copiado y última captura"),
+    LAST_APP("Última app", "Vuelve a la app anterior con vista previa del icono"),
+    SYSTEM_BACK("Atrás (sistema)", "Vuelve atrás en la app actual"),
+    SYSTEM_HOME("Inicio", "Vuelve a la pantalla principal"),
+    SYSTEM_RECENTS("Apps recientes", "Abre la vista de multitarea"),
+    TAKE_SCREENSHOT("Tomar captura", "Guarda una captura de pantalla"),
+    TOGGLE_FLASHLIGHT("Linterna", "Enciende o apaga el flash"),
+    VOICE_ASSISTANT("Asistente de voz", "Abre ChatGPT Voz / Live"),
+    LAUNCH_APP("Abrir una app…", "Lanza la aplicación que elijas"),
+    NONE("Desactivado", "No hace nada con este gesto")
+}
+
 data class SearchItem(
     val id: String,
     val title: String,
