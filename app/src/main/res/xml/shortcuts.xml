@@ -14,6 +14,19 @@
     </shortcut>
 
     <shortcut
+        android:shortcutId="open_spotlight"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_panel"
+        android:shortcutShortLabel="@string/shortcut_spotlight_short"
+        android:shortcutLongLabel="@string/shortcut_spotlight_long"
+        android:shortcutDisabledMessage="@string/shortcut_unavailable">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.stree.nexo"
+            android:targetClass="com.stree.nexo.SpotlightShortcutActivity" />
+    </shortcut>
+
+    <shortcut
         android:shortcutId="open_nexo"
         android:enabled="true"
         android:icon="@drawable/ic_shortcut_app"

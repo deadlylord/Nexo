@@ -214,8 +214,11 @@ fun SettingsScreen(
             }
         }
 
-        // 2. Estudio interactivo de Zona de Activación y Gestos
+        // 2. Isla Dinámica + Estudio interactivo de Zona de Activación y Gestos
         if (activeFilter == SettingsSectionFilter.ALL || activeFilter == SettingsSectionFilter.TOUCH) {
+            item {
+                DynamicIslandCard()
+            }
             item {
                 ActivationZoneCard(side = panelSide)
             }
@@ -1235,6 +1238,157 @@ private fun PanelPreviewCard(config: PanelPreviewConfig) {
                     }
                 }
             }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DynamicIslandCard() {
+    val context = LocalContext.current
+    var enabled by remember { mutableStateOf(Prefs.dynamicIslandEnabled(context)) }
+    var idlePill by remember { mutableStateOf(Prefs.dynamicIslandIdlePill(context)) }
+    var media by remember { mutableStateOf(Prefs.dynamicIslandMedia(context)) }
+    var notifications by remember { mutableStateOf(Prefs.dynamicIslandNotifications(context)) }
+    var topOffset by remember { mutableFloatStateOf(Prefs.dynamicIslandTopOffset(context).toFloat()) }
+
+    val themeSpec = remember(Prefs.themeRevision) {
+        Prefs.panelStyle(context).visualSpec(light = false)
+    }
+
+    SettingsSectionCard(
+        title = "Isla Dinámica de Nexo",
+        subtitle = "Cápsula superior con tu tema para música, avisos y notificaciones en ventana flotante",
+        icon = Icons.Filled.Layers,
+        badgeText = if (enabled) "Activa" else "Inactiva",
+        badgeActive = enabled
+    ) {
+        // Vista previa temática de la Isla Dinámica
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = Color(0xFF0C0E14),
+                border = BorderStroke(
+                    width = 1.2.dp,
+                    brush = Brush.linearGradient(
+                        listOf(
+                            themeSpec.primary.copy(alpha = 0.8f),
+                            Color.White.copy(alpha = 0.35f),
+                            themeSpec.secondary.copy(alpha = 0.75f)
+                        )
+                    )
+                ),
+                modifier = Modifier
+                    .fillMaxWidth(0.76f)
+                    .height(42.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .background(themeSpec.primary.copy(alpha = 0.28f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.MusicNote,
+                            contentDescription = null,
+                            tint = themeSpec.primary,
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "Isla Dinámica · Nexo",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "Toca notificaciones para ventana flotante",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 9.sp,
+                            color = Color(0xFFB8C0D4),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.width(2.5.dp).height(8.dp).clip(CircleShape).background(themeSpec.primary))
+                        Box(Modifier.width(2.5.dp).height(14.dp).clip(CircleShape).background(themeSpec.secondary))
+                        Box(Modifier.width(2.5.dp).height(10.dp).clip(CircleShape).background(themeSpec.primary))
+                    }
+                }
+            }
+        }
+
+        SwitchRow(
+            title = "Activar Isla Dinámica superior",
+            subtitle = "Aparece arriba al reproducir música, copiar, capturar o recibir notificaciones",
+            checked = enabled,
+            onCheckedChange = {
+                enabled = it
+                Prefs.setDynamicIslandEnabled(context, it)
+                EdgePanelService.refresh(context)
+            }
+        )
+
+        if (enabled) {
+            SectionDivider()
+            SwitchRow(
+                title = "Notificaciones en ventana flotante",
+                subtitle = "Muestra la notificación arriba; al tocarla la abre en ventana flotante",
+                checked = notifications,
+                onCheckedChange = {
+                    notifications = it
+                    Prefs.setDynamicIslandNotifications(context, it)
+                    EdgePanelService.refresh(context)
+                }
+            )
+            SwitchRow(
+                title = "Reproductor en vivo en la isla",
+                subtitle = "Muestra la canción actual y se expande al tocar para controlar reproducción",
+                checked = media,
+                onCheckedChange = {
+                    media = it
+                    Prefs.setDynamicIslandMedia(context, it)
+                    EdgePanelService.refresh(context)
+                }
+            )
+            SwitchRow(
+                title = "Cápsula siempre visible (acceso Spotlight)",
+                subtitle = "Mantiene una cápsula discreta en reposo; al tocarla abre la búsqueda estilo iPhone",
+                checked = idlePill,
+                onCheckedChange = {
+                    idlePill = it
+                    Prefs.setDynamicIslandIdlePill(context, it)
+                    EdgePanelService.refresh(context)
+                }
+            )
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                SteppedSlider(
+                    label = "Separación superior (alinear con cámara)",
+                    valueText = "${topOffset.roundToInt()} dp",
+                    value = topOffset,
+                    valueRange = 0f..48f,
+                    stepAmount = 2f,
+                    onValueChange = { topOffset = it },
+                    onValueChangeFinished = {
+                        Prefs.setDynamicIslandTopOffset(context, topOffset.roundToInt())
+                        EdgePanelService.refresh(context)
+                    }
+                )
             }
         }
     }

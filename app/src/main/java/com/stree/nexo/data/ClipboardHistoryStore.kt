@@ -27,6 +27,8 @@ data class ScreenshotEntry(
 
 data class NotificationPulse(
     val packageName: String,
+    val appName: String,
+    val title: String,
     val appIcon: Bitmap?,
     val accentColor: Int?,
     val contentIntent: PendingIntent?,
@@ -132,14 +134,22 @@ object ClipboardHistoryStore {
     fun recordNotification(
         context: Context,
         packageName: String,
+        title: String = "",
         accentColor: Int?,
         contentIntent: PendingIntent?
     ): NotificationPulse {
+        val pm = context.packageManager
+        val appName = runCatching {
+            val info = pm.getApplicationInfo(packageName, 0)
+            pm.getApplicationLabel(info).toString()
+        }.getOrDefault(packageName.substringAfterLast('.'))
         val iconBitmap = runCatching {
-            context.packageManager.getApplicationIcon(packageName).toBitmap(72, 72)
+            pm.getApplicationIcon(packageName).toBitmap(72, 72)
         }.getOrNull()
         val pulse = NotificationPulse(
             packageName = packageName,
+            appName = appName,
+            title = title,
             appIcon = iconBitmap,
             accentColor = accentColor,
             contentIntent = contentIntent,

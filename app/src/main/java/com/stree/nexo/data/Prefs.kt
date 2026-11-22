@@ -198,6 +198,48 @@ object Prefs {
         prefs(context).edit().putBoolean("edge_pulse_notification", enabled).apply()
     }
 
+    fun dynamicIslandEnabled(context: Context): Boolean =
+        prefs(context).getBoolean("dynamic_island_enabled", true)
+
+    fun setDynamicIslandEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("dynamic_island_enabled", enabled).apply()
+    }
+
+    fun dynamicIslandIdlePill(context: Context): Boolean =
+        prefs(context).getBoolean("dynamic_island_idle_pill", false)
+
+    fun setDynamicIslandIdlePill(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("dynamic_island_idle_pill", enabled).apply()
+    }
+
+    fun dynamicIslandTopOffset(context: Context): Int =
+        prefs(context).getInt("dynamic_island_top_offset", 8).coerceIn(0, 48)
+
+    fun setDynamicIslandTopOffset(context: Context, offsetDp: Int) {
+        prefs(context).edit().putInt("dynamic_island_top_offset", offsetDp.coerceIn(0, 48)).apply()
+    }
+
+    fun dynamicIslandMedia(context: Context): Boolean =
+        prefs(context).getBoolean("dynamic_island_media", true)
+
+    fun setDynamicIslandMedia(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("dynamic_island_media", enabled).apply()
+    }
+
+    fun dynamicIslandNotifications(context: Context): Boolean =
+        prefs(context).getBoolean("dynamic_island_notifications", true)
+
+    fun setDynamicIslandNotifications(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("dynamic_island_notifications", enabled).apply()
+    }
+
+    fun mainSpotlightMode(context: Context): Boolean =
+        prefs(context).getBoolean("main_spotlight_mode", true)
+
+    fun setMainSpotlightMode(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("main_spotlight_mode", enabled).apply()
+    }
+
     fun edgeGestureAction(context: Context, gesture: EdgeGesture): EdgeGestureAction = runCatching {
         val raw = prefs(context).getString("edge_gesture_${gesture.name}", gesture.defaultAction.name).orEmpty()
         EdgeGestureAction.valueOf(raw)

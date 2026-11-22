@@ -8,5 +8,7 @@
     <string name="shortcut_panel_long">Abrir el panel de Nexo</string>
     <string name="shortcut_app_short">Abrir Nexo</string>
     <string name="shortcut_app_long">Abrir la aplicación Nexo</string>
+    <string name="shortcut_spotlight_short">Spotlight</string>
+    <string name="shortcut_spotlight_long">Búsqueda rápida Spotlight</string>
     <string name="shortcut_unavailable">Este acceso de Nexo no está disponible</string>
 </resources>

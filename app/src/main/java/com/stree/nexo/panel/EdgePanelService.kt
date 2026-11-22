@@ -1,6 +1,5 @@
 package com.stree.nexo.panel
 
-import android.app.ActivityOptions
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -39,6 +38,7 @@ import com.stree.nexo.MainActivity
 import com.stree.nexo.QuickClipActivity
 import com.stree.nexo.R
 import com.stree.nexo.SearchActivity
+import com.stree.nexo.SpotlightSearchActivity
 import com.stree.nexo.data.ClipboardHistoryStore
 import com.stree.nexo.data.EdgeGesture
 import com.stree.nexo.data.EdgeGestureAction
@@ -49,11 +49,15 @@ import com.stree.nexo.data.PanelSide
 import com.stree.nexo.data.Prefs
 import com.stree.nexo.data.PreviousAppTarget
 import com.stree.nexo.data.UsageStore
+import com.stree.nexo.media.MediaControlService
+import com.stree.nexo.media.NowPlaying
+import com.stree.nexo.search.ItemLauncher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
@@ -66,6 +70,16 @@ class EdgePanelService : Service() {
     private lateinit var layoutParams: WindowManager.LayoutParams
     private var idleWidthPx = 0
     private var idleHeightPx = 0
+
+    // Isla Dinámica superior
+    private var islandView: DynamicIslandView? = null
+    private var islandParams: WindowManager.LayoutParams? = null
+    private var islandTemporaryAlert = false
+    private var islandMediaExpanded = false
+    private var currentPlayback: NowPlaying? = null
+    private var currentPlaybackIcon: Bitmap? = null
+    private var currentPlaybackPkg: String? = null
+    private var playbackJob: Job? = null
 
     private var downRawX = 0f
     private var downRawY = 0f
@@ -136,6 +150,25 @@ class EdgePanelService : Service() {
         collapseLiveAlert()
     }
 
+    private val islandAlertTimeoutRunnable = Runnable {
+        islandTemporaryAlert = false
+        refreshIslandIdleState()
+    }
+
+    private val islandMediaCollapseRunnable = Runnable {
+        islandMediaExpanded = false
+        refreshIslandIdleState()
+    }
+
+    private val islandTimerTickRunnable = object : Runnable {
+        override fun run() {
+            if (islandView?.mode == IslandMode.SILENT_TIMER) {
+                refreshIslandIdleState()
+                gestureHandler.postDelayed(this, 30_000L)
+            }
+        }
+    }
+
     private val holdAction = Runnable {
         if (pullArmed && !pullTriggered) {
             pullTriggered = true
@@ -177,17 +210,23 @@ class EdgePanelService : Service() {
 
     private val restoreSoundRunnable = Runnable {
         SoundControl.restoreIfExpired(applicationContext)
+        refreshIslandIdleState()
     }
 
     private fun rescheduleSilentTimer() {
         gestureHandler.removeCallbacks(restoreSoundRunnable)
         val until = Prefs.silentUntilMillis(this)
-        if (until <= 0L) return
+        if (until <= 0L) {
+            refreshIslandIdleState()
+            return
+        }
         val remaining = until - System.currentTimeMillis()
         if (remaining <= 0L) {
             SoundControl.restoreIfExpired(applicationContext)
+            refreshIslandIdleState()
         } else {
             gestureHandler.postDelayed(restoreSoundRunnable, remaining)
+            refreshIslandIdleState()
         }
     }
 
@@ -198,13 +237,17 @@ class EdgePanelService : Service() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         createNotificationChannel()
         startForegroundNotification()
-        if (Prefs.isPanelEnabled(this)) addHandle()
+        if (Prefs.isPanelEnabled(this)) {
+            addHandle()
+            setupDynamicIsland()
+        }
         rescheduleSilentTimer()
         registerClipboardObserver()
         registerScreenshotObserver()
         registerTorchCallback()
+        observeMediaPlayback()
 
-        handleView?.visibility = if (hostUiVisible || panelUiVisible) View.GONE else View.VISIBLE
+        setHandleVisible(!hostUiVisible && !panelUiVisible)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -214,6 +257,7 @@ class EdgePanelService : Service() {
         }
         if (intent?.action == ACTION_REFRESH) {
             addHandle()
+            setupDynamicIsland()
             registerScreenshotObserver()
         }
         if (intent?.action == ACTION_WIDGET) intent.getStringExtra("item_id")?.let { id ->
@@ -227,13 +271,270 @@ class EdgePanelService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        playbackJob?.cancel()
         unregisterObservers()
         gestureHandler.removeCallbacksAndMessages(null)
         gestureScope.cancel()
         floatingWidget.close()
+        removeDynamicIsland()
         removeHandle()
         if (instance === this) instance = null
         super.onDestroy()
+    }
+
+    private fun observeMediaPlayback() {
+        playbackJob?.cancel()
+        playbackJob = gestureScope.launch {
+            MediaControlService.playback.collectLatest { playing ->
+                currentPlayback = playing
+                val pkg = playing?.packageName?.takeIf { it.isNotBlank() }
+                if (pkg != currentPlaybackPkg) {
+                    currentPlaybackPkg = pkg
+                    currentPlaybackIcon = if (pkg != null) {
+                        withContext(Dispatchers.IO) {
+                            runCatching {
+                                packageManager.getApplicationIcon(pkg).toBitmap(72, 72)
+                            }.getOrNull()
+                        }
+                    } else null
+                }
+                if (playing == null) islandMediaExpanded = false
+                if (!islandTemporaryAlert) {
+                    refreshIslandIdleState()
+                }
+            }
+        }
+    }
+
+    private fun setupDynamicIsland() {
+        removeDynamicIsland()
+        if (!Settings.canDrawOverlays(this) || !Prefs.dynamicIslandEnabled(this)) return
+
+        val params = WindowManager.LayoutParams(
+            dp(114),
+            dp(28),
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = dp(Prefs.dynamicIslandTopOffset(this@EdgePanelService))
+        }
+
+        val view = DynamicIslandView(this).apply {
+            visibility = View.GONE
+            listener = object : IslandInteractionListener {
+                override fun onTapMain(mode: IslandMode) = handleIslandMainTap(mode)
+                override fun onMediaPrev() {
+                    Haptics.perform(this@EdgePanelService)
+                    currentPlayback?.controller?.transportControls?.skipToPrevious()
+                    scheduleMediaAutoCollapse()
+                }
+                override fun onMediaPlayPause() {
+                    Haptics.perform(this@EdgePanelService)
+                    val now = currentPlayback ?: return
+                    if (now.playing) now.controller.transportControls.pause()
+                    else now.controller.transportControls.play()
+                    scheduleMediaAutoCollapse()
+                }
+                override fun onMediaNext() {
+                    Haptics.perform(this@EdgePanelService)
+                    currentPlayback?.controller?.transportControls?.skipToNext()
+                    scheduleMediaAutoCollapse()
+                }
+                override fun onMediaOpenApp() {
+                    Haptics.perform(this@EdgePanelService)
+                    islandMediaExpanded = false
+                    refreshIslandIdleState()
+                    val pkg = currentPlayback?.packageName
+                    if (!pkg.isNullOrBlank()) {
+                        if (!ItemLauncher.launchPackageFloating(this@EdgePanelService, pkg)) {
+                            MediaControlService.openPlayingApp(this@EdgePanelService)
+                        }
+                    } else {
+                        MediaControlService.openPlayingApp(this@EdgePanelService)
+                    }
+                }
+                override fun onSwipeUpDismiss() {
+                    Haptics.perform(this@EdgePanelService)
+                    gestureHandler.removeCallbacks(islandAlertTimeoutRunnable)
+                    gestureHandler.removeCallbacks(islandMediaCollapseRunnable)
+                    islandTemporaryAlert = false
+                    islandMediaExpanded = false
+                    if (islandView?.mode == IslandMode.COMPACT_MEDIA) {
+                        islandView?.hideImmediate()
+                        islandView?.visibility = View.GONE
+                    } else {
+                        refreshIslandIdleState()
+                    }
+                }
+            }
+        }
+
+        islandView = view
+        islandParams = params
+        runCatching {
+            windowManager.addView(view, params)
+            refreshIslandIdleState()
+        }.onFailure {
+            islandView = null
+            islandParams = null
+        }
+    }
+
+    private fun removeDynamicIsland() {
+        gestureHandler.removeCallbacks(islandAlertTimeoutRunnable)
+        gestureHandler.removeCallbacks(islandMediaCollapseRunnable)
+        gestureHandler.removeCallbacks(islandTimerTickRunnable)
+        islandTemporaryAlert = false
+        islandMediaExpanded = false
+        val view = islandView ?: return
+        runCatching { windowManager.removeView(view) }
+        islandView = null
+        islandParams = null
+    }
+
+    private fun handleIslandMainTap(mode: IslandMode) {
+        Haptics.perform(this)
+        when (mode) {
+            IslandMode.IDLE_PILL -> openSpotlight()
+            IslandMode.COMPACT_MEDIA -> {
+                islandMediaExpanded = true
+                refreshIslandIdleState()
+                scheduleMediaAutoCollapse()
+            }
+            IslandMode.EXPANDED_MEDIA -> {
+                islandMediaExpanded = false
+                refreshIslandIdleState()
+            }
+            IslandMode.NOTIFICATION -> {
+                gestureHandler.removeCallbacks(islandAlertTimeoutRunnable)
+                islandTemporaryAlert = false
+                refreshIslandIdleState()
+                openLatestNotification()
+            }
+            IslandMode.CLIPBOARD -> {
+                gestureHandler.removeCallbacks(islandAlertTimeoutRunnable)
+                islandTemporaryAlert = false
+                refreshIslandIdleState()
+                openQuickClip("clipboard")
+            }
+            IslandMode.SCREENSHOT -> {
+                gestureHandler.removeCallbacks(islandAlertTimeoutRunnable)
+                islandTemporaryAlert = false
+                refreshIslandIdleState()
+                openQuickClip("screenshot")
+            }
+            IslandMode.SILENT_TIMER -> openControls("actions")
+            IslandMode.HIDDEN -> Unit
+        }
+    }
+
+    private fun scheduleMediaAutoCollapse() {
+        gestureHandler.removeCallbacks(islandMediaCollapseRunnable)
+        gestureHandler.postDelayed(islandMediaCollapseRunnable, 6_000L)
+    }
+
+    private fun updateIslandLayout(mode: IslandMode) {
+        val view = islandView ?: return
+        val params = islandParams ?: return
+        if (mode == IslandMode.HIDDEN || hostUiVisible || panelUiVisible || !Prefs.dynamicIslandEnabled(this)) {
+            view.hideImmediate()
+            view.visibility = View.GONE
+            return
+        }
+        val targetW = dp(view.desiredWidthDp(mode))
+        val targetH = dp(view.desiredHeightDp(mode))
+        val targetY = dp(Prefs.dynamicIslandTopOffset(this))
+        if (params.width != targetW || params.height != targetH || params.y != targetY) {
+            params.width = targetW
+            params.height = targetH
+            params.y = targetY
+            runCatching { windowManager.updateViewLayout(view, params) }
+        }
+        if (view.visibility != View.VISIBLE) {
+            view.visibility = View.VISIBLE
+        }
+    }
+
+    private fun showIslandAlert(
+        mode: IslandMode,
+        title: String,
+        subtitle: String = "",
+        badge: String = "",
+        icon: Bitmap? = null,
+        accentColor: Int? = null,
+        durationMs: Long = ISLAND_ALERT_DURATION_MS
+    ) {
+        if (!Prefs.dynamicIslandEnabled(this)) return
+        if (hostUiVisible || panelUiVisible) return
+        val view = islandView ?: return
+        islandTemporaryAlert = true
+        islandMediaExpanded = false
+        gestureHandler.removeCallbacks(islandAlertTimeoutRunnable)
+        gestureHandler.removeCallbacks(islandMediaCollapseRunnable)
+        updateIslandLayout(mode)
+        view.showState(
+            newMode = mode,
+            title = title,
+            subtitle = subtitle,
+            badge = badge,
+            icon = icon,
+            accentColor = accentColor,
+            playing = false
+        )
+        gestureHandler.postDelayed(islandAlertTimeoutRunnable, durationMs)
+    }
+
+    private fun refreshIslandIdleState() {
+        val view = islandView ?: return
+        if (!Prefs.dynamicIslandEnabled(this) || hostUiVisible || panelUiVisible) {
+            updateIslandLayout(IslandMode.HIDDEN)
+            return
+        }
+        if (islandTemporaryAlert) return
+
+        val playing = currentPlayback
+        if (playing != null && Prefs.dynamicIslandMedia(this)) {
+            val mode = if (islandMediaExpanded) IslandMode.EXPANDED_MEDIA else IslandMode.COMPACT_MEDIA
+            updateIslandLayout(mode)
+            view.showState(
+                newMode = mode,
+                title = playing.title,
+                subtitle = playing.artist,
+                icon = currentPlaybackIcon,
+                playing = playing.playing
+            )
+            return
+        }
+
+        val silentUntil = Prefs.silentUntilMillis(this)
+        val remainingMs = silentUntil - System.currentTimeMillis()
+        if (silentUntil > 0L && remainingMs > 0L) {
+            val mins = ((remainingMs + 59_999L) / 60_000L).toInt().coerceAtLeast(1)
+            val label = if (mins >= 60) {
+                val h = mins / 60
+                val m = mins % 60
+                if (m == 0) "Silencio · ${h}h" else "Silencio · ${h}h ${m}m"
+            } else {
+                "Silencio · ${mins}m"
+            }
+            updateIslandLayout(IslandMode.SILENT_TIMER)
+            view.showState(newMode = IslandMode.SILENT_TIMER, title = label)
+            gestureHandler.removeCallbacks(islandTimerTickRunnable)
+            gestureHandler.postDelayed(islandTimerTickRunnable, 30_000L)
+            return
+        }
+
+        if (Prefs.dynamicIslandIdlePill(this)) {
+            updateIslandLayout(IslandMode.IDLE_PILL)
+            view.showState(newMode = IslandMode.IDLE_PILL)
+            return
+        }
+
+        updateIslandLayout(IslandMode.HIDDEN)
     }
 
     private fun registerClipboardObserver() {
@@ -377,17 +678,24 @@ class EdgePanelService : Service() {
     }
 
     private fun triggerCopyAlert() {
-        if (!Prefs.edgePulseOnCopy(this)) return
         if (hostUiVisible || panelUiVisible) return
         val now = System.currentTimeMillis()
         if (now - lastCopyAlertMs < 1_800L) return
         lastCopyAlertMs = now
         ClipboardHistoryStore.readSystemClipboard(applicationContext)
-        showLiveAlert(EdgeLiveMode.CLIPBOARD, bitmap = null, accentColor = null)
+        if (Prefs.edgePulseOnCopy(this)) {
+            showLiveAlert(EdgeLiveMode.CLIPBOARD, bitmap = null, accentColor = null)
+        }
+        if (Prefs.dynamicIslandEnabled(this)) {
+            showIslandAlert(
+                mode = IslandMode.CLIPBOARD,
+                title = "Texto copiado",
+                badge = "Abrir"
+            )
+        }
     }
 
     private fun triggerScreenshotAlert(alreadyQueried: Boolean = false) {
-        if (!Prefs.edgePulseOnScreenshot(this)) return
         if (hostUiVisible || panelUiVisible) return
         val now = System.currentTimeMillis()
         if (now - lastShotAlertMs < 2_500L) return
@@ -400,17 +708,37 @@ class EdgePanelService : Service() {
                 if (latest != null) lastSeenScreenshotUri = latest.uri
             }
         }
-        showLiveAlert(EdgeLiveMode.SCREENSHOT, bitmap = null, accentColor = null)
+        if (Prefs.edgePulseOnScreenshot(this)) {
+            showLiveAlert(EdgeLiveMode.SCREENSHOT, bitmap = null, accentColor = null)
+        }
+        if (Prefs.dynamicIslandEnabled(this)) {
+            showIslandAlert(
+                mode = IslandMode.SCREENSHOT,
+                title = "Captura lista",
+                badge = "Ver"
+            )
+        }
     }
 
     private fun triggerNotificationAlert(pulse: NotificationPulse) {
-        if (!Prefs.edgePulseOnNotification(this)) return
         if (hostUiVisible || panelUiVisible) return
-        showLiveAlert(
-            mode = EdgeLiveMode.NOTIFICATION,
-            bitmap = pulse.appIcon,
-            accentColor = pulse.accentColor
-        )
+        if (Prefs.edgePulseOnNotification(this)) {
+            showLiveAlert(
+                mode = EdgeLiveMode.NOTIFICATION,
+                bitmap = pulse.appIcon,
+                accentColor = pulse.accentColor
+            )
+        }
+        if (Prefs.dynamicIslandEnabled(this) && Prefs.dynamicIslandNotifications(this)) {
+            showIslandAlert(
+                mode = IslandMode.NOTIFICATION,
+                title = pulse.appName,
+                subtitle = pulse.title.ifBlank { "Toca para ventana flotante" },
+                icon = pulse.appIcon,
+                accentColor = pulse.accentColor,
+                durationMs = 4_800L
+            )
+        }
     }
 
     private fun showLiveAlert(mode: EdgeLiveMode, bitmap: Bitmap?, accentColor: Int?) {
@@ -443,6 +771,7 @@ class EdgePanelService : Service() {
         }
     }
 
+    /** Abre la última notificación recibida directamente en ventana flotante (freeform). */
     private fun openLatestNotification() {
         Haptics.perform(this)
         val pulse = ClipboardHistoryStore.latestNotification
@@ -450,29 +779,11 @@ class EdgePanelService : Service() {
             openPanel()
             return
         }
-        val sent = pulse.contentIntent?.let { pending ->
-            runCatching {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    @Suppress("DEPRECATION")
-                    val opts = ActivityOptions.makeBasic()
-                        .setPendingIntentBackgroundActivityStartMode(
-                            ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
-                        ).toBundle()
-                    pending.send(this, 0, null, null, null, null, opts)
-                } else {
-                    pending.send()
-                }
-                true
-            }.getOrDefault(false)
-        } ?: false
-
-        if (!sent) {
-            val launch = packageManager.getLaunchIntentForPackage(pulse.packageName)
-                ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            if (launch != null) {
-                runCatching { startActivity(launch) }
-            }
-        }
+        ItemLauncher.launchNotificationFloating(
+            context = this,
+            packageName = pulse.packageName,
+            contentIntent = pulse.contentIntent
+        )
     }
 
     private fun prefetchPreviousApp(updatePreview: Boolean = false) {
@@ -519,7 +830,6 @@ class EdgePanelService : Service() {
                 if (doubleTapHandled) return true
                 val dx = event.rawX - downRawX
                 val dy = event.rawY - downRawY
-                // Un desplazamiento nunca cuenta como toque simple.
                 if (abs(dx) > touchSlop || abs(dy) > touchSlop) rejectedGesture = true
                 val inward = if (Prefs.panelSide(this) == PanelSide.START) dx else -dx
                 val canHold = inward >= dp(30) && abs(dx) > abs(dy) * 1.5f
@@ -597,6 +907,7 @@ class EdgePanelService : Service() {
     private fun executeAction(action: EdgeGestureAction, gesture: EdgeGesture) {
         when (action) {
             EdgeGestureAction.OPEN_PANEL -> openPanel()
+            EdgeGestureAction.OPEN_SPOTLIGHT -> openSpotlight()
             EdgeGestureAction.OPEN_CONTROLS -> openControls("actions")
             EdgeGestureAction.OPEN_BRIGHTNESS -> openControls("brightness")
             EdgeGestureAction.OPEN_VOLUME -> openControls("volume")
@@ -604,7 +915,6 @@ class EdgePanelService : Service() {
             EdgeGestureAction.OPEN_CLIPBOARD -> openQuickClip("clipboard")
             EdgeGestureAction.LAST_APP -> openLastApp()
             EdgeGestureAction.SYSTEM_BACK -> {
-                // En SWIPE_IN no molestamos con aviso si Android ya interceptó el borde.
                 val ok = SplitScreenService.performBack()
                 if (!ok && gesture != EdgeGesture.SWIPE_IN) {
                     promptAccessibilityNeeded()
@@ -766,6 +1076,16 @@ class EdgePanelService : Service() {
         runCatching { startActivity(intent) }
     }
 
+    private fun openSpotlight() {
+        Haptics.perform(this)
+        val intent = Intent(this, SpotlightSearchActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+            addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+        }
+        runCatching { startActivity(intent) }
+    }
+
     private fun openControls(mode: String) {
         Haptics.perform(this)
         runCatching {
@@ -799,7 +1119,14 @@ class EdgePanelService : Service() {
     private fun setHandleVisible(visible: Boolean) {
         if (!visible) {
             gestureHandler.removeCallbacks(collapseAlertRunnable)
+            gestureHandler.removeCallbacks(islandAlertTimeoutRunnable)
+            gestureHandler.removeCallbacks(islandMediaCollapseRunnable)
+            islandTemporaryAlert = false
+            islandMediaExpanded = false
             handleView?.collapseToIdle { setOverlayExpanded(false) }
+            updateIslandLayout(IslandMode.HIDDEN)
+        } else {
+            refreshIslandIdleState()
         }
         handleView?.visibility = if (visible) View.VISIBLE else View.GONE
     }
@@ -876,6 +1203,9 @@ class EdgePanelService : Service() {
         /** Tiempo que permanece iluminada la barra viva tras un evento. */
         private const val LIVE_ALERT_DURATION_MS = 4_000L
 
+        /** Tiempo que permanece activa una alerta en la Isla Dinámica. */
+        private const val ISLAND_ALERT_DURATION_MS = 4_400L
+
         fun showWidget(context: Context, itemId: String) {
             if (Settings.canDrawOverlays(context)) {
                 ContextCompat.startForegroundService(
@@ -888,21 +1218,18 @@ class EdgePanelService : Service() {
         }
 
         fun notifyCopyDetected(context: Context) {
-            if (!Prefs.edgePulseOnCopy(context)) return
             instance?.let { service ->
                 service.gestureHandler.post { service.triggerCopyAlert() }
             }
         }
 
         fun notifyScreenshotDetected(context: Context) {
-            if (!Prefs.edgePulseOnScreenshot(context)) return
             instance?.let { service ->
                 service.gestureHandler.post { service.triggerScreenshotAlert() }
             }
         }
 
         fun notifyNotificationPulse(context: Context, pulse: NotificationPulse) {
-            if (!Prefs.edgePulseOnNotification(context)) return
             instance?.let { service ->
                 service.gestureHandler.post { service.triggerNotificationAlert(pulse) }
             }
@@ -926,7 +1253,7 @@ class EdgePanelService : Service() {
             }
         }
 
-        /** Hides the edge handle while Nexo's own UI is in front. */
+        /** Hides the edge handle and dynamic island while Nexo's own UI is in front. */
         fun setHandleVisible(visible: Boolean) {
             hostUiVisible = !visible
             instance?.let { service ->

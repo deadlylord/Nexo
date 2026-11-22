@@ -53,16 +53,75 @@ object ItemLauncher {
     fun launchFloating(context: Context, item: SearchItem): Boolean = runCatching {
         if (!canOpenFloating(item)) return false
         val intent = intentFor(context, item) ?: return false
+        launchIntentFloating(context, intent)
+    }.getOrDefault(false)
+
+    /** Abre una aplicación por paquete en ventana flotante (freeform). */
+    fun launchPackageFloating(context: Context, packageName: String?): Boolean {
+        if (packageName.isNullOrBlank()) return false
+        val intent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return false
+        return launchIntentFloating(context, intent)
+    }
+
+    /**
+     * Abre una notificación (su PendingIntent o la app origen) directamente en
+     * ventana flotante, con respaldo automático a modo normal si el sistema lo bloquea.
+     */
+    fun launchNotificationFloating(
+        context: Context,
+        packageName: String,
+        contentIntent: android.app.PendingIntent?
+    ): Boolean {
+        if (contentIntent != null) {
+            val sentFloating = runCatching {
+                val options = buildFloatingOptions(context, allowBackgroundPendingIntent = true)
+                contentIntent.send(context, 0, null, null, null, null, options)
+                true
+            }.getOrDefault(false)
+            if (sentFloating) return true
+        }
+
+        if (launchPackageFloating(context, packageName)) return true
+
+        if (contentIntent != null) {
+            val sentNormal = runCatching {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    @Suppress("DEPRECATION")
+                    val opts = ActivityOptions.makeBasic()
+                        .setPendingIntentBackgroundActivityStartMode(
+                            ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                        ).toBundle()
+                    contentIntent.send(context, 0, null, null, null, null, opts)
+                } else {
+                    contentIntent.send()
+                }
+                true
+            }.getOrDefault(false)
+            if (sentNormal) return true
+        }
+
+        return launchApp(context, packageName)
+    }
+
+    private fun launchIntentFloating(context: Context, rawIntent: Intent): Boolean = runCatching {
+        val intent = Intent(rawIntent)
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         // Sin MULTIPLE_TASK el sistema reutiliza la tarea existente (en pantalla
         // completa) y se ignora el tamaño de ventana.
         intent.addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+        context.startActivity(intent, buildFloatingOptions(context))
+        true
+    }.getOrDefault(false)
 
+    private fun buildFloatingOptions(
+        context: Context,
+        allowBackgroundPendingIntent: Boolean = false
+    ): android.os.Bundle {
         val metrics = context.resources.displayMetrics
-        val width = (metrics.widthPixels * 0.82f).toInt()
-        val height = (metrics.heightPixels * 0.60f).toInt()
+        val width = (metrics.widthPixels * 0.84f).toInt()
+        val height = (metrics.heightPixels * 0.62f).toInt()
         val left = (metrics.widthPixels - width) / 2
-        val top = (metrics.heightPixels * 0.20f).toInt()
+        val top = (metrics.heightPixels * 0.18f).toInt()
 
         val options = ActivityOptions.makeBasic()
         options.setLaunchBounds(Rect(left, top, left + width, top + height))
@@ -77,13 +136,22 @@ object ItemLauncher {
             method.invoke(options, WINDOWING_MODE_FREEFORM)
         }
 
+        if (allowBackgroundPendingIntent &&
+            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+        ) {
+            runCatching {
+                @Suppress("DEPRECATION")
+                options.setPendingIntentBackgroundActivityStartMode(
+                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                )
+            }
+        }
+
         val bundle = options.toBundle()
         // Respaldo: clave interna que usa el propio ActivityOptions.
         bundle.putInt(EXTRA_LAUNCH_WINDOWING_MODE, WINDOWING_MODE_FREEFORM)
-
-        context.startActivity(intent, bundle)
-        true
-    }.getOrDefault(false)
+        return bundle
+    }
 
     private fun intentFor(context: Context, item: SearchItem): Intent? = when (item.type) {
         ItemType.APP -> item.packageName

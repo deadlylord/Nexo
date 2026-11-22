@@ -47,6 +47,7 @@ enum class EdgeGesture(val label: String, val subtitle: String, val defaultActio
 
 enum class EdgeGestureAction(val label: String, val description: String) {
     OPEN_PANEL("Panel principal", "Abre tus favoritos y buscador"),
+    OPEN_SPOTLIGHT("Búsqueda Spotlight", "Abre la búsqueda rápida estilo iPhone"),
     OPEN_CONTROLS("Controles rápidos", "Silencio, temporizador y asistente"),
     OPEN_BRIGHTNESS("Brillo", "Control rápido de brillo"),
     OPEN_VOLUME("Volumen", "Control rápido de audio"),

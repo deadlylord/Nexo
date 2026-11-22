@@ -160,9 +160,12 @@ class MediaControlService : NotificationListenerService() {
         if (isOngoing || pkg == "android" || pkg == "com.android.systemui") return
 
         val accent = notif.color.takeIf { it != 0 }
+        val rawTitle = notif.extras?.getCharSequence(android.app.Notification.EXTRA_TITLE)
+            ?.toString()?.trim().orEmpty().take(48)
         val pulse = com.stree.nexo.data.ClipboardHistoryStore.recordNotification(
             context = applicationContext,
             packageName = pkg,
+            title = rawTitle,
             accentColor = accent,
             contentIntent = notif.contentIntent
         )

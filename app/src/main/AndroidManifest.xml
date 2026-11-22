@@ -107,6 +107,21 @@
             android:taskAffinity="com.stree.nexo.clip"
             android:theme="@style/Theme.Nexo.Panel" />
 
+        <activity
+            android:name=".SpotlightSearchActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.stree.nexo.spotlight"
+            android:theme="@style/Theme.Nexo.Panel" />
+
+        <activity
+            android:name=".SpotlightShortcutActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay" />
+
         <activity android:name=".WidgetPickerActivity"
             android:exported="false" android:excludeFromRecents="true" />
 
