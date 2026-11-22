@@ -857,14 +857,9 @@ private fun SpotlightDialogAction(
     }
 }
 
-/** Evaluador seguro de operaciones aritméticas básicas (+, -, *, /, paréntesis) para Spotlight. */
-private fun evaluateSimpleMath(input: String): String? {
-    val clean = input.replace(" ", "").replace('×', '*').replace('÷', '/').replace(',', '.')
-    if (clean.length < 3 || clean.length > 48) return null
-    if (!clean.any { it in "+-*/" }) return null
-    if (!clean.all { it.isDigit() || it in "+-*/()." }) return null
-
+private class SimpleMathParser(private val clean: String) {
     var pos = 0
+
     fun parseExpr(): Double? {
         var acc = parseTerm() ?: return null
         while (pos < clean.length && (clean[pos] == '+' || clean[pos] == '-')) {
@@ -875,7 +870,7 @@ private fun evaluateSimpleMath(input: String): String? {
         return acc
     }
 
-    fun parseTerm(): Double? {
+    private fun parseTerm(): Double? {
         var acc = parseFactor() ?: return null
         while (pos < clean.length && (clean[pos] == '*' || clean[pos] == '/')) {
             val op = clean[pos++]
@@ -886,7 +881,7 @@ private fun evaluateSimpleMath(input: String): String? {
         return acc
     }
 
-    fun parseFactor(): Double? {
+    private fun parseFactor(): Double? {
         if (pos >= clean.length) return null
         if (clean[pos] == '+') { pos++; return parseFactor() }
         if (clean[pos] == '-') { pos++; return parseFactor()?.let { -it } }
@@ -902,9 +897,18 @@ private fun evaluateSimpleMath(input: String): String? {
         if (start == pos) return null
         return clean.substring(start, pos).toDoubleOrNull()
     }
+}
 
-    val value = runCatching { parseExpr() }.getOrNull() ?: return null
-    if (pos != clean.length || value.isNaN() || value.isInfinite()) return null
+/** Evaluador seguro de operaciones aritméticas básicas (+, -, *, /, paréntesis) para Spotlight. */
+private fun evaluateSimpleMath(input: String): String? {
+    val clean = input.replace(" ", "").replace('×', '*').replace('÷', '/').replace(',', '.')
+    if (clean.length < 3 || clean.length > 48) return null
+    if (!clean.any { it in "+-*/" }) return null
+    if (!clean.all { it.isDigit() || it in "+-*/()." }) return null
+
+    val parser = SimpleMathParser(clean)
+    val value = runCatching { parser.parseExpr() }.getOrNull() ?: return null
+    if (parser.pos != clean.length || value.isNaN() || value.isInfinite()) return null
     return runCatching {
         BigDecimal.valueOf(value)
             .setScale(6, RoundingMode.HALF_UP)
