@@ -92,6 +92,22 @@ class EdgePanelService : Service() {
         }).apply { setIsLongpressEnabled(false) }
     }
 
+    private val restoreSoundRunnable = Runnable {
+        SoundControl.restoreIfExpired(applicationContext)
+    }
+
+    private fun rescheduleSilentTimer() {
+        gestureHandler.removeCallbacks(restoreSoundRunnable)
+        val until = Prefs.silentUntilMillis(this)
+        if (until <= 0L) return
+        val remaining = until - System.currentTimeMillis()
+        if (remaining <= 0L) {
+            SoundControl.restoreIfExpired(applicationContext)
+        } else {
+            gestureHandler.postDelayed(restoreSoundRunnable, remaining)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -100,6 +116,7 @@ class EdgePanelService : Service() {
         createNotificationChannel()
         startForegroundNotification()
         if (Prefs.isPanelEnabled(this)) addHandle()
+        rescheduleSilentTimer()
 
         handleView?.visibility = if (hostUiVisible || panelUiVisible) View.GONE else View.VISIBLE
     }
@@ -114,6 +131,7 @@ class EdgePanelService : Service() {
             runCatching { floatingWidget.show(id) }
                 .onFailure { android.widget.Toast.makeText(this, "No se pudo abrir el widget", android.widget.Toast.LENGTH_SHORT).show() }
         }
+        rescheduleSilentTimer()
         return START_STICKY
     }
 
