@@ -498,13 +498,17 @@ fun SearchBody(
                         slots[cursor] = item
                         cursor++
                     }
+                    val cols = gridColumns.coerceIn(3, 6)
                     val suggestions = ArrayDeque(unified.filterNot { it.id in state.pinnedIds })
                     val maxPinnedEnd = (slots.keys.maxOrNull() ?: -1) + 1
-                    val end = maxOf(
+                    val rawEnd = maxOf(
                         maxPinnedEnd,
                         minFillSlots,
-                        if (showEmptySlots) gridColumns * 6 else 0
+                        if (showEmptySlots) cols * 6 else 0
                     )
+                    val end = if (rawEnd > 0 && rawEnd % cols != 0) {
+                        ((rawEnd + cols - 1) / cols) * cols
+                    } else rawEnd
                     val cells = (0 until end).mapNotNull { position ->
                         slots[position]
                             ?: (if (!showEmptySlots) suggestions.removeFirstOrNull() else null)
@@ -2025,35 +2029,56 @@ private fun SearchPage(
             val pinned = state.sections.flatMap { it.items }.filter {
                 it.id in state.pinnedIds && it.type != ItemType.SETTING
             }.distinctBy { it.id }
-            val frequentFill = state.frequentApps.filterNot { it.id in state.pinnedIds }
+            val frequentFill = state.frequentApps
+                .ifEmpty { state.allItems.filter { it.type == ItemType.APP } }
+                .filterNot { it.id in state.pinnedIds }
             // Las apps ancladas ocupan sus posiciones y, si no llenan el panel,
-            // los huecos restantes se completan con las frecuentes no ancladas.
-            PanelSection(
-                "Favoritos",
-                if (wrapHeight) Modifier.fillMaxWidth() else Modifier.weight(1f)
+            // se mide el área real visible y se completa con las frecuentes no ancladas.
+            BoxWithConstraints(
+                modifier = if (wrapHeight) Modifier.fillMaxWidth() else Modifier.weight(1f).fillMaxWidth()
             ) {
-                SearchBody(
-                    state = state.copy(
-                        sections = listOf(
-                            ResultSection("Ancladas", pinned),
-                            ResultSection("Frecuentes", frequentFill)
-                        )
-                    ),
-                    onItemClick = onItemClick, onCallContact = onCallContact,
-                    onOpenFloating = onOpenFloating, onItemLongClick = onItemLongClick,
-                    onItemLongClickAtSlot = onItemLongClickAtSlot,
-                    onRequestContacts = onRequestContacts,
-                    modifier = if (wrapHeight) Modifier.fillMaxWidth() else Modifier.fillMaxSize(),
-                    bottomContentPaddingDp = 0,
-                    showSectionHeaders = false, showShortcutsNote = false, showTileLabels = showLabels,
-                    resultSide = side, centerItems = false, bottomAnchored = true,
-                    onEmptySpaceClick = onAddRequest,
-                    onMovePinned = onMovePinned, onMovePinnedToSlot = onMovePinnedToSlot,
-                    onAddSlot = onAddSlot, gridColumns = columns,
-                    tileIconScale = iconScale, tileSpacingDp = spacingDp,
-                    onWidgetGesture = onWidgetGesture, wrapHeight = wrapHeight,
-                    minFillSlots = minFillSlots
-                )
+                val cols = columns.coerceIn(3, 6)
+                val density = LocalDensity.current
+                val usableWidth = (maxWidth - 8.dp - (spacingDp * (cols - 1)).dp).coerceAtLeast(80.dp)
+                val cellWidth = usableWidth / cols
+                val baseIcon = (cellWidth * 0.58f).coerceIn(26.dp, 50.dp)
+                val iconSize = (baseIcon * iconScale.coerceIn(0.75f, 1.35f))
+                    .coerceAtMost((cellWidth * 0.80f).coerceAtLeast(22.dp))
+                val labelHeight = if (showLabels) with(density) { 14.sp.toDp() } + 2.dp else 0.dp
+                val rowHeight = iconSize + 4.dp + labelHeight
+                val rowStride = (rowHeight + spacingDp.dp).coerceAtLeast(36.dp)
+                val measuredRows = if (maxHeight != Dp.Infinity && maxHeight > 0.dp) {
+                    ((maxHeight + spacingDp.dp) / rowStride).toInt().coerceAtLeast(1)
+                } else 0
+                val effectiveFillSlots = maxOf(minFillSlots, measuredRows * cols)
+
+                PanelSection(
+                    "Favoritos",
+                    if (wrapHeight) Modifier.fillMaxWidth() else Modifier.fillMaxSize()
+                ) {
+                    SearchBody(
+                        state = state.copy(
+                            sections = listOf(
+                                ResultSection("Ancladas", pinned),
+                                ResultSection("Frecuentes", frequentFill)
+                            )
+                        ),
+                        onItemClick = onItemClick, onCallContact = onCallContact,
+                        onOpenFloating = onOpenFloating, onItemLongClick = onItemLongClick,
+                        onItemLongClickAtSlot = onItemLongClickAtSlot,
+                        onRequestContacts = onRequestContacts,
+                        modifier = if (wrapHeight) Modifier.fillMaxWidth() else Modifier.fillMaxSize(),
+                        bottomContentPaddingDp = 0,
+                        showSectionHeaders = false, showShortcutsNote = false, showTileLabels = showLabels,
+                        resultSide = side, centerItems = false, bottomAnchored = true,
+                        onEmptySpaceClick = onAddRequest,
+                        onMovePinned = onMovePinned, onMovePinnedToSlot = onMovePinnedToSlot,
+                        onAddSlot = onAddSlot, gridColumns = columns,
+                        tileIconScale = iconScale, tileSpacingDp = spacingDp,
+                        onWidgetGesture = onWidgetGesture, wrapHeight = wrapHeight,
+                        minFillSlots = effectiveFillSlots
+                    )
+                }
             }
         } else SearchBody(
             state = state,

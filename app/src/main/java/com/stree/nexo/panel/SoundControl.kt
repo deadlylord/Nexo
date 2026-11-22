@@ -10,6 +10,12 @@ import android.os.Build
 import com.stree.nexo.data.Prefs
 import kotlinx.coroutines.delay
 
+enum class SilenceResult {
+    SILENCED,
+    PERMISSION_REQUIRED,
+    FAILED
+}
+
 /**
  * Control de sonido y temporizador de silencio sin activar No molestar ni
  * restringir la llegada de notificaciones.
@@ -32,46 +38,38 @@ object SoundControl {
         }
     }
 
-    suspend fun silenceWithoutRestrictingNotifications(context: Context) {
-        val audio = context.getSystemService(AudioManager::class.java) ?: return
+    suspend fun silenceWithoutRestrictingNotifications(context: Context): SilenceResult {
+        val audio = context.getSystemService(AudioManager::class.java) ?: return SilenceResult.FAILED
+        // Android exige este permiso a nivel de sistema para activar RINGER_MODE_SILENT
+        // (incluso sin usar No molestar). Sin él, Android bloquea el modo silencio.
+        if (!soundPolicyAllowed(context)) return SilenceResult.PERMISSION_REQUIRED
+
         saveActiveVolumes(context, audio)
         val nm = context.getSystemService(NotificationManager::class.java)
         val dndWasOff = nm.currentInterruptionFilter == NotificationManager.INTERRUPTION_FILTER_ALL
 
-        fun muteStreamsOnly() {
-            runCatching { audio.ringerMode = AudioManager.RINGER_MODE_VIBRATE }
-            listOf(AudioManager.STREAM_NOTIFICATION, AudioManager.STREAM_SYSTEM).forEach { stream ->
-                runCatching { audio.setStreamVolume(stream, 0, 0) }
+        val applied = runCatching {
+            audio.ringerMode = AudioManager.RINGER_MODE_SILENT
+            true
+        }.getOrDefault(false)
+        if (!applied) return SilenceResult.FAILED
+
+        // En Android 9+ (y Samsung One UI) RINGER_MODE_SILENT ya no activa No molestar,
+        // pero verificamos por seguridad en ROMs antiguas que No molestar siga desactivado.
+        if (dndWasOff) {
+            delay(100)
+            if (nm.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL) {
+                runCatching { nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL) }
+                if (audio.ringerMode != AudioManager.RINGER_MODE_SILENT) {
+                    runCatching { audio.ringerMode = AudioManager.RINGER_MODE_SILENT }
+                }
             }
         }
 
-        if (soundPolicyAllowed(context)) {
-            val applied = runCatching {
-                audio.ringerMode = AudioManager.RINGER_MODE_SILENT
-                true
-            }.getOrDefault(false)
-
-            if (!applied) {
-                muteStreamsOnly()
-                return
-            }
-
-            // Si el fabricante activa No molestar al cambiar a RINGER_MODE_SILENT,
-            // lo revertimos de inmediato para no restringir notificaciones.
-            if (dndWasOff) {
-                if (nm.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL) {
-                    runCatching { nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL) }
-                    muteStreamsOnly()
-                    return
-                }
-                delay(150)
-                if (nm.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL) {
-                    runCatching { nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL) }
-                    muteStreamsOnly()
-                }
-            }
+        return if (audio.ringerMode == AudioManager.RINGER_MODE_SILENT) {
+            SilenceResult.SILENCED
         } else {
-            muteStreamsOnly()
+            SilenceResult.FAILED
         }
     }
 
@@ -112,9 +110,11 @@ object SoundControl {
         return true
     }
 
-    suspend fun scheduleTimedSilence(context: Context, durationMinutes: Int): Long {
+    suspend fun scheduleTimedSilence(context: Context, durationMinutes: Int): SilenceResult {
         val minutes = durationMinutes.coerceIn(1, 24 * 60)
-        silenceWithoutRestrictingNotifications(context)
+        val result = silenceWithoutRestrictingNotifications(context)
+        if (result != SilenceResult.SILENCED) return result
+
         val untilMillis = System.currentTimeMillis() + minutes * 60_000L
         Prefs.setSilentUntilMillis(context, untilMillis)
 
@@ -132,7 +132,7 @@ object SoundControl {
             }
         }
         EdgePanelService.syncSilentTimer(context)
-        return untilMillis
+        return SilenceResult.SILENCED
     }
 
     fun cancelTimedSilence(context: Context) {

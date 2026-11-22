@@ -54,6 +54,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.stree.nexo.R
 import com.stree.nexo.data.Haptics
 import com.stree.nexo.data.Prefs
+import com.stree.nexo.panel.SilenceResult
 import com.stree.nexo.panel.SoundControl
 import com.stree.nexo.ui.theme.visualSpec
 import kotlinx.coroutines.delay
@@ -183,14 +184,24 @@ internal fun ControlPanelPage(mode: String) {
             val idleBg = themeSpec.surfaceVariant.copy(alpha = 0.42f)
             val idleBorder = themeSpec.outlineVariant.copy(alpha = 0.30f)
 
+            fun requestSilencePermission() {
+                context.controlMessage("Activa Nexo aquí para poder poner el celular en silencio (no restringe notificaciones)")
+                context.openControlPermission(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+            }
+
             fun applyTimedSilence(minutes: Int) {
                 Haptics.perform(context)
                 scope.launch {
-                    SoundControl.scheduleTimedSilence(context, minutes)
-                    nowMillis = System.currentTimeMillis()
-                    showTimerPicker = false
-                    revision++
-                    context.controlMessage("En silencio por ${formatDuration(minutes)}")
+                    when (SoundControl.scheduleTimedSilence(context, minutes)) {
+                        SilenceResult.SILENCED -> {
+                            nowMillis = System.currentTimeMillis()
+                            showTimerPicker = false
+                            revision++
+                            context.controlMessage("En silencio por ${formatDuration(minutes)}")
+                        }
+                        SilenceResult.PERMISSION_REQUIRED -> requestSilencePermission()
+                        SilenceResult.FAILED -> context.controlMessage("El dispositivo no permitió activar silencio")
+                    }
                 }
             }
 
@@ -233,8 +244,11 @@ internal fun ControlPanelPage(mode: String) {
                                 Haptics.perform(context)
                                 scope.launch {
                                     SoundControl.cancelTimedSilence(context)
-                                    SoundControl.silenceWithoutRestrictingNotifications(context)
-                                    revision++
+                                    when (SoundControl.silenceWithoutRestrictingNotifications(context)) {
+                                        SilenceResult.SILENCED -> revision++
+                                        SilenceResult.PERMISSION_REQUIRED -> requestSilencePermission()
+                                        SilenceResult.FAILED -> context.controlMessage("El dispositivo no permitió activar silencio")
+                                    }
                                 }
                             }
 
