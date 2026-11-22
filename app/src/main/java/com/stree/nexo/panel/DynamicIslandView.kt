@@ -5,12 +5,14 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import android.text.TextPaint
@@ -33,6 +35,7 @@ enum class IslandMode {
     NOTIFICATION,
     EXPANDED_NOTIFICATION,
     EXPANDED_HUB,
+    RINGER_MODE,
     CHARGING,
     BLUETOOTH,
     CALL,
@@ -74,13 +77,15 @@ data class IslandDisplayState(
     val progressLeftText: String = "",
     val progressRightText: String = "",
     val batteryPercent: Int = 0,
+    val ringerMode: Int = AudioManager.RINGER_MODE_NORMAL,
     val notificationActionLabels: List<String> = emptyList(),
     val satellite: IslandSatellite = IslandSatellite.NONE,
     val satelliteIcon: Bitmap? = null,
     val flashlightOn: Boolean = false,
     val silentOn: Boolean = false,
     val stopwatchRunning: Boolean = false,
-    val stopwatchLabel: String = "00:00"
+    val stopwatchLabel: String = "00:00",
+    val calibrationGuide: Boolean = false
 )
 
 interface IslandInteractionListener {
@@ -100,7 +105,9 @@ interface IslandInteractionListener {
 
 /**
  * Isla Dinámica OLED negra pura (#000000) fundida con la cámara perforada.
- * Sin bordes de color: solo acentos internos sutiles sincronizados con Nexo.
+ * Respeta la zona segura del lente de la cámara en todos los modos (compactos
+ * divididos izquierda/derecha y expandidos debajo de la cámara) para que el
+ * hueco jamás tape el texto.
  */
 class DynamicIslandView(context: Context) : View(context) {
 
@@ -148,6 +155,11 @@ class DynamicIslandView(context: Context) : View(context) {
         color = Color.BLACK
         style = Paint.Style.FILL
     }
+    private val guidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(190, 56, 189, 248)
+        style = Paint.Style.STROKE
+        pathEffect = DashPathEffect(floatArrayOf(8f, 6f), 0f)
+    }
     private val chipPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
@@ -177,6 +189,12 @@ class DynamicIslandView(context: Context) : View(context) {
     private val clipPath = Path()
     private val iconRect = RectF()
 
+    private fun cameraTopSafeDp(): Int {
+        val gap = Prefs.dynamicIslandCameraGap(context)
+        if (gap <= 0) return 8
+        return (Prefs.dynamicIslandIdleHeight(context) + 4).coerceIn(26, 42)
+    }
+
     private fun hasSatellite(targetMode: IslandMode = state.mode, sat: IslandSatellite = state.satellite): Boolean =
         sat != IslandSatellite.NONE && (
             targetMode == IslandMode.COMPACT_MEDIA ||
@@ -189,18 +207,20 @@ class DynamicIslandView(context: Context) : View(context) {
         targetMode: IslandMode = state.mode,
         sat: IslandSatellite = state.satellite
     ): Int {
+        val camGap = Prefs.dynamicIslandCameraGap(context)
         val base = when (targetMode) {
             IslandMode.HIDDEN -> 1
-            IslandMode.IDLE_PILL -> Prefs.dynamicIslandIdleWidth(context)
-            IslandMode.SILENT_TIMER -> 178
-            IslandMode.STOPWATCH -> 182
-            IslandMode.COMPACT_MEDIA -> 212
-            IslandMode.CLIPBOARD -> 214
-            IslandMode.SCREENSHOT -> 224
-            IslandMode.CHARGING -> 222
-            IslandMode.BLUETOOTH -> 236
-            IslandMode.CALL -> 232
-            IslandMode.NOTIFICATION -> 290
+            IslandMode.IDLE_PILL -> Prefs.dynamicIslandIdleWidth(context).coerceAtLeast(camGap + 24)
+            IslandMode.COMPACT_MEDIA -> (camGap + 124).coerceIn(156, 240)
+            IslandMode.RINGER_MODE -> (camGap + 168).coerceIn(188, 268)
+            IslandMode.CHARGING -> (camGap + 148).coerceIn(174, 252)
+            IslandMode.STOPWATCH -> (camGap + 150).coerceIn(174, 252)
+            IslandMode.SILENT_TIMER -> (camGap + 156).coerceIn(178, 258)
+            IslandMode.CALL -> (camGap + 158).coerceIn(180, 262)
+            IslandMode.BLUETOOTH -> 252
+            IslandMode.CLIPBOARD -> 236
+            IslandMode.SCREENSHOT -> 244
+            IslandMode.NOTIFICATION -> 296
             IslandMode.EXPANDED_MEDIA -> 334
             IslandMode.EXPANDED_NOTIFICATION -> 334
             IslandMode.EXPANDED_HUB -> 334
@@ -208,21 +228,27 @@ class DynamicIslandView(context: Context) : View(context) {
         return if (hasSatellite(targetMode, sat)) base + 44 else base
     }
 
-    fun desiredHeightDp(targetMode: IslandMode = state.mode): Int = when (targetMode) {
-        IslandMode.HIDDEN -> 1
-        IslandMode.IDLE_PILL -> Prefs.dynamicIslandIdleHeight(context)
-        IslandMode.SILENT_TIMER -> 34
-        IslandMode.STOPWATCH -> 34
-        IslandMode.COMPACT_MEDIA -> 36
-        IslandMode.CLIPBOARD -> 38
-        IslandMode.SCREENSHOT -> 38
-        IslandMode.CHARGING -> 38
-        IslandMode.BLUETOOTH -> 38
-        IslandMode.CALL -> 38
-        IslandMode.NOTIFICATION -> 54
-        IslandMode.EXPANDED_NOTIFICATION -> 132
-        IslandMode.EXPANDED_HUB -> 138
-        IslandMode.EXPANDED_MEDIA -> 142
+    fun desiredHeightDp(targetMode: IslandMode = state.mode): Int {
+        val idleH = Prefs.dynamicIslandIdleHeight(context)
+        val topSafe = cameraTopSafeDp()
+        val compactH = idleH.coerceAtLeast(36)
+        return when (targetMode) {
+            IslandMode.HIDDEN -> 1
+            IslandMode.IDLE_PILL -> idleH
+            IslandMode.COMPACT_MEDIA,
+            IslandMode.RINGER_MODE,
+            IslandMode.CHARGING,
+            IslandMode.STOPWATCH,
+            IslandMode.SILENT_TIMER,
+            IslandMode.CALL -> compactH
+            IslandMode.BLUETOOTH,
+            IslandMode.CLIPBOARD,
+            IslandMode.SCREENSHOT -> topSafe + 40
+            IslandMode.NOTIFICATION -> topSafe + 48
+            IslandMode.EXPANDED_NOTIFICATION -> topSafe + 114
+            IslandMode.EXPANDED_HUB -> topSafe + 120
+            IslandMode.EXPANDED_MEDIA -> topSafe + 124
+        }
     }
 
     fun render(newState: IslandDisplayState) {
@@ -231,14 +257,14 @@ class DynamicIslandView(context: Context) : View(context) {
 
         if (modeChanged) {
             morphAnimator?.cancel()
-            morphAnimator = ValueAnimator.ofFloat(0.76f, 1f).apply {
+            morphAnimator = ValueAnimator.ofFloat(0.78f, 1f).apply {
                 duration = when (newState.mode) {
                     IslandMode.EXPANDED_MEDIA,
                     IslandMode.EXPANDED_NOTIFICATION,
-                    IslandMode.EXPANDED_HUB -> 270L
-                    else -> 220L
+                    IslandMode.EXPANDED_HUB -> 260L
+                    else -> 210L
                 }
-                interpolator = OvershootInterpolator(0.75f)
+                interpolator = OvershootInterpolator(0.7f)
                 addUpdateListener {
                     morphProgress = it.animatedValue as Float
                     invalidate()
@@ -400,7 +426,7 @@ class DynamicIslandView(context: Context) : View(context) {
         val satDiameter = dp(36f).coerceAtMost(height.toFloat())
         val satGap = dp(8f)
 
-        val scale = morphProgress.coerceIn(0.70f, 1.03f)
+        val scale = morphProgress.coerceIn(0.72f, 1.03f)
         val fullMainW = if (showSat) (width - satDiameter - satGap).coerceAtLeast(dp(64f)) else width.toFloat()
         val drawW = (fullMainW * scale).coerceAtMost(fullMainW)
         val drawH = (height * (0.86f + 0.14f * scale)).coerceAtMost(height.toFloat())
@@ -414,6 +440,10 @@ class DynamicIslandView(context: Context) : View(context) {
             IslandMode.EXPANDED_MEDIA,
             IslandMode.EXPANDED_NOTIFICATION,
             IslandMode.EXPANDED_HUB -> dp(30f)
+            IslandMode.NOTIFICATION,
+            IslandMode.BLUETOOTH,
+            IslandMode.CLIPBOARD,
+            IslandMode.SCREENSHOT -> dp(24f)
             else -> drawH / 2f
         }
 
@@ -432,21 +462,42 @@ class DynamicIslandView(context: Context) : View(context) {
             satelliteRect.setEmpty()
         }
 
+        val camHalfPx = dp(Prefs.dynamicIslandCameraGap(context).toFloat()) / 2f
+        val topSafePx = dp(cameraTopSafeDp().toFloat())
+
         when (state.mode) {
-            IslandMode.IDLE_PILL -> Unit // Negro puro absoluto fundido con la cámara
-            IslandMode.COMPACT_MEDIA -> drawCompactMedia(canvas, primaryArgb, secondaryArgb)
-            IslandMode.EXPANDED_MEDIA -> drawExpandedMedia(canvas, primaryArgb, secondaryArgb)
-            IslandMode.NOTIFICATION -> drawCompactNotification(canvas, accentArgb)
-            IslandMode.EXPANDED_NOTIFICATION -> drawExpandedNotification(canvas, primaryArgb, accentArgb)
-            IslandMode.EXPANDED_HUB -> drawExpandedHub(canvas, primaryArgb, secondaryArgb)
-            IslandMode.CHARGING -> drawCharging(canvas)
-            IslandMode.BLUETOOTH -> drawBluetooth(canvas)
-            IslandMode.CALL -> drawCall(canvas)
-            IslandMode.STOPWATCH -> drawStopwatch(canvas)
-            IslandMode.SILENT_TIMER -> drawSilentTimer(canvas, primaryArgb)
-            IslandMode.CLIPBOARD -> drawActionAlert(canvas, primaryArgb, isScreenshot = false)
-            IslandMode.SCREENSHOT -> drawActionAlert(canvas, secondaryArgb, isScreenshot = true)
+            IslandMode.IDLE_PILL -> Unit
+            IslandMode.COMPACT_MEDIA -> drawCompactMedia(canvas, primaryArgb, secondaryArgb, camHalfPx)
+            IslandMode.RINGER_MODE -> drawRingerMode(canvas, primaryArgb, camHalfPx)
+            IslandMode.CHARGING -> drawCharging(canvas, camHalfPx)
+            IslandMode.CALL -> drawCall(canvas, camHalfPx)
+            IslandMode.STOPWATCH -> drawStopwatch(canvas, camHalfPx)
+            IslandMode.SILENT_TIMER -> drawSilentTimer(canvas, primaryArgb, camHalfPx)
+            IslandMode.BLUETOOTH -> drawBluetooth(canvas, topSafePx)
+            IslandMode.CLIPBOARD -> drawActionAlert(canvas, primaryArgb, topSafePx, isScreenshot = false)
+            IslandMode.SCREENSHOT -> drawActionAlert(canvas, secondaryArgb, topSafePx, isScreenshot = true)
+            IslandMode.NOTIFICATION -> drawCompactNotification(canvas, accentArgb, topSafePx)
+            IslandMode.EXPANDED_MEDIA -> drawExpandedMedia(canvas, primaryArgb, secondaryArgb, topSafePx)
+            IslandMode.EXPANDED_NOTIFICATION -> drawExpandedNotification(canvas, primaryArgb, accentArgb, topSafePx)
+            IslandMode.EXPANDED_HUB -> drawExpandedHub(canvas, primaryArgb, secondaryArgb, topSafePx)
             IslandMode.HIDDEN -> Unit
+        }
+
+        // Aro guía azul translúcido durante calibración en Ajustes para alinear sobre la cámara física
+        if (state.calibrationGuide) {
+            guidePaint.strokeWidth = dp(1.4f)
+            val camR = (camHalfPx * 0.72f).coerceIn(dp(8f), dp(18f))
+            val camCy = dp(Prefs.dynamicIslandIdleHeight(context).toFloat()) / 2f
+            canvas.drawCircle(pillRect.centerX(), camCy, camR, guidePaint)
+            canvas.drawRoundRect(
+                pillRect.left + dp(1f),
+                pillRect.top + dp(1f),
+                pillRect.right - dp(1f),
+                pillRect.bottom - dp(1f),
+                cornerRadius,
+                cornerRadius,
+                guidePaint
+            )
         }
     }
 
@@ -474,10 +525,16 @@ class DynamicIslandView(context: Context) : View(context) {
         }
     }
 
-    private fun drawCompactMedia(canvas: Canvas, primaryArgb: Int, secondaryArgb: Int) {
+    // ---- Modos compactos de 1 fila con zona central libre para la cámara ----
+
+    private fun drawCompactMedia(canvas: Canvas, primaryArgb: Int, secondaryArgb: Int, camHalfPx: Float) {
         val cy = pillRect.centerY()
+        val leftZoneEnd = pillRect.centerX() - camHalfPx
+        val rightZoneStart = pillRect.centerX() + camHalfPx
+
+        // Ala izquierda: carátula circular o nota musical
         val iconR = dp(11.5f)
-        val iconCx = pillRect.left + dp(17f)
+        val iconCx = ((pillRect.left + dp(6f) + leftZoneEnd) / 2f).coerceAtLeast(pillRect.left + dp(16f))
         val bmp = state.icon
         if (bmp != null) {
             drawCircularBitmap(canvas, bmp, iconCx, cy, iconR)
@@ -487,28 +544,218 @@ class DynamicIslandView(context: Context) : View(context) {
             drawMusicNoteGlyph(canvas, iconCx, cy, dp(6f), primaryArgb)
         }
 
-        val eqRight = pillRect.right - dp(12f)
-        drawEqualizer(canvas, eqRight - dp(13.5f), cy, primaryArgb, secondaryArgb, playing = state.playing)
+        // Ala derecha: ecualizador animado (jamás cruza el lente de la cámara)
+        val eqWidth = dp(13.5f)
+        val eqX = ((rightZoneStart + pillRect.right - dp(6f)) / 2f - eqWidth / 2f)
+            .coerceAtMost(pillRect.right - dp(12f) - eqWidth)
+        drawEqualizer(canvas, eqX, cy, primaryArgb, secondaryArgb, playing = state.playing)
+    }
 
-        val textLeft = iconCx + iconR + dp(8f)
-        val textMaxW = (eqRight - dp(21f) - textLeft).coerceAtLeast(dp(24f))
-        titlePaint.textSize = dp(11.8f)
+    private fun drawRingerMode(canvas: Canvas, primaryArgb: Int, camHalfPx: Float) {
+        val cy = pillRect.centerY()
+        val leftZoneEnd = pillRect.centerX() - camHalfPx
+        val rightZoneStart = pillRect.centerX() + camHalfPx
+
+        val (label, tint) = when (state.ringerMode) {
+            AudioManager.RINGER_MODE_SILENT -> "Silencio" to COLOR_CORAL
+            AudioManager.RINGER_MODE_VIBRATE -> "Vibrar" to COLOR_AMBER
+            else -> "Sonido" to COLOR_GREEN
+        }
+
+        val iconCx = ((pillRect.left + dp(8f) + leftZoneEnd) / 2f).coerceAtLeast(pillRect.left + dp(17f))
+        chipPaint.color = withAlpha(tint, 44)
+        canvas.drawCircle(iconCx, cy, dp(11f), chipPaint)
+        when (state.ringerMode) {
+            AudioManager.RINGER_MODE_SILENT -> drawBellOffGlyph(canvas, iconCx, cy, dp(6.4f), tint)
+            AudioManager.RINGER_MODE_VIBRATE -> drawVibrateGlyph(canvas, iconCx, cy, dp(6.6f), tint)
+            else -> drawSoundOnGlyph(canvas, iconCx, cy, dp(6.6f), tint)
+        }
+
+        val rightCenter = (rightZoneStart + pillRect.right - dp(8f)) / 2f
+        val maxW = (pillRect.right - dp(10f) - rightZoneStart).coerceAtLeast(dp(36f))
+        badgePaint.textSize = dp(11.8f)
+        badgePaint.color = tint
+        val text = TextUtils.ellipsize(label, badgePaint, maxW, TextUtils.TruncateAt.END).toString()
+        val base = cy - (badgePaint.descent() + badgePaint.ascent()) / 2f
+        canvas.drawText(text, rightCenter, base, badgePaint)
+    }
+
+    private fun drawCharging(canvas: Canvas, camHalfPx: Float) {
+        val cy = pillRect.centerY()
+        val leftZoneEnd = pillRect.centerX() - camHalfPx
+        val rightZoneStart = pillRect.centerX() + camHalfPx
+
+        val boltCx = ((pillRect.left + dp(8f) + leftZoneEnd) / 2f).coerceAtLeast(pillRect.left + dp(17f))
+        val pulseAlpha = (165 + 90 * sin(pulsePhase * Math.PI * 2.0)).toInt().coerceIn(95, 255)
+        drawBoltGlyph(canvas, boltCx, cy, dp(8f), withAlpha(COLOR_GREEN, pulseAlpha))
+
+        val pctText = "${state.batteryPercent.coerceIn(0, 100)}%"
+        val rightCenter = (rightZoneStart + pillRect.right - dp(8f)) / 2f
+        badgePaint.textSize = dp(12.2f)
+        badgePaint.color = COLOR_GREEN
+        val base = cy - (badgePaint.descent() + badgePaint.ascent()) / 2f
+        canvas.drawText(pctText, rightCenter, base, badgePaint)
+    }
+
+    private fun drawCall(canvas: Canvas, camHalfPx: Float) {
+        val cy = pillRect.centerY()
+        val leftZoneEnd = pillRect.centerX() - camHalfPx
+        val rightZoneStart = pillRect.centerX() + camHalfPx
+
+        val iconCx = ((pillRect.left + dp(8f) + leftZoneEnd) / 2f).coerceAtLeast(pillRect.left + dp(17f))
+        val pulseAlpha = (170 + 85 * sin(pulsePhase * Math.PI * 2.0)).toInt().coerceIn(100, 255)
+        chipPaint.color = withAlpha(COLOR_GREEN, 48)
+        canvas.drawCircle(iconCx, cy, dp(11f), chipPaint)
+        drawPhoneGlyph(canvas, iconCx, cy, dp(6.5f), withAlpha(COLOR_GREEN, pulseAlpha))
+
+        val timeText = state.badge.ifBlank { "00:00" }
+        val rightCenter = (rightZoneStart + pillRect.right - dp(8f)) / 2f
+        badgePaint.textSize = dp(11.8f)
+        badgePaint.color = COLOR_GREEN
+        val base = cy - (badgePaint.descent() + badgePaint.ascent()) / 2f
+        canvas.drawText(timeText, rightCenter, base, badgePaint)
+    }
+
+    private fun drawStopwatch(canvas: Canvas, camHalfPx: Float) {
+        val cy = pillRect.centerY()
+        val leftZoneEnd = pillRect.centerX() - camHalfPx
+        val rightZoneStart = pillRect.centerX() + camHalfPx
+
+        val iconCx = ((pillRect.left + dp(8f) + leftZoneEnd) / 2f).coerceAtLeast(pillRect.left + dp(17f))
+        drawClockGlyph(canvas, iconCx, cy, dp(7f), COLOR_AMBER)
+
+        val rightCenter = (rightZoneStart + pillRect.right - dp(8f)) / 2f
+        badgePaint.textSize = dp(12f)
+        badgePaint.color = COLOR_AMBER
+        val base = cy - (badgePaint.descent() + badgePaint.ascent()) / 2f
+        canvas.drawText(state.stopwatchLabel, rightCenter, base, badgePaint)
+    }
+
+    private fun drawSilentTimer(canvas: Canvas, accentArgb: Int, camHalfPx: Float) {
+        val cy = pillRect.centerY()
+        val leftZoneEnd = pillRect.centerX() - camHalfPx
+        val rightZoneStart = pillRect.centerX() + camHalfPx
+
+        val iconCx = ((pillRect.left + dp(8f) + leftZoneEnd) / 2f).coerceAtLeast(pillRect.left + dp(17f))
+        drawBellOffGlyph(canvas, iconCx, cy, dp(6.8f), accentArgb)
+
+        val rightCenter = (rightZoneStart + pillRect.right - dp(8f)) / 2f
+        val maxW = (pillRect.right - dp(10f) - rightZoneStart).coerceAtLeast(dp(36f))
+        badgePaint.textSize = dp(11.5f)
+        badgePaint.color = Color.WHITE
+        val text = TextUtils.ellipsize(state.title, badgePaint, maxW, TextUtils.TruncateAt.END).toString()
+        val base = cy - (badgePaint.descent() + badgePaint.ascent()) / 2f
+        canvas.drawText(text, rightCenter, base, badgePaint)
+    }
+
+    // ---- Modos con texto debajo de la zona de cámara (0 solapamiento con el lente) ----
+
+    private fun drawBluetooth(canvas: Canvas, topSafePx: Float) {
+        val cy = topSafePx + (pillRect.bottom - topSafePx) / 2f
+        val iconCx = pillRect.left + dp(20f)
+        drawBluetoothGlyph(canvas, iconCx, cy, dp(7.5f), COLOR_BLUE)
+
+        val badgeW = dp(62f)
+        val textLeft = iconCx + dp(14f)
+        val maxW = (pillRect.right - badgeW - dp(12f) - textLeft).coerceAtLeast(dp(40f))
+        titlePaint.textSize = dp(12f)
         titlePaint.color = Color.WHITE
-        val ellipsized = TextUtils.ellipsize(
-            state.title.ifBlank { "Reproduciendo" },
+        val name = TextUtils.ellipsize(
+            state.title.ifBlank { "Bluetooth" },
+            titlePaint,
+            maxW,
+            TextUtils.TruncateAt.END
+        ).toString()
+        val base = cy - (titlePaint.descent() + titlePaint.ascent()) / 2f
+        canvas.drawText(name, textLeft, base, titlePaint)
+
+        subtitlePaint.textSize = dp(10.5f)
+        subtitlePaint.color = COLOR_BLUE
+        val tag = "Conectado"
+        val tw = subtitlePaint.measureText(tag)
+        canvas.drawText(tag, pillRect.right - dp(14f) - tw, base, subtitlePaint)
+    }
+
+    private fun drawActionAlert(canvas: Canvas, accentArgb: Int, topSafePx: Float, isScreenshot: Boolean) {
+        val cy = topSafePx + (pillRect.bottom - topSafePx) / 2f
+        val iconCx = pillRect.left + dp(20f)
+        if (isScreenshot) {
+            drawScreenshotGlyph(canvas, iconCx, cy, dp(7f), accentArgb)
+        } else {
+            drawClipboardGlyph(canvas, iconCx, cy, dp(7f), accentArgb)
+        }
+
+        val chipW = dp(46f)
+        val chipH = dp(22f)
+        val chipRect = RectF(
+            pillRect.right - dp(12f) - chipW,
+            cy - chipH / 2f,
+            pillRect.right - dp(12f),
+            cy + chipH / 2f
+        )
+        chipPaint.color = withAlpha(accentArgb, 78)
+        canvas.drawRoundRect(chipRect, chipH / 2f, chipH / 2f, chipPaint)
+        badgePaint.textSize = dp(10.5f)
+        badgePaint.color = Color.WHITE
+        val chipBaseline = cy - (badgePaint.descent() + badgePaint.ascent()) / 2f
+        canvas.drawText(state.badge.ifBlank { "Abrir" }, chipRect.centerX(), chipBaseline, badgePaint)
+
+        val textLeft = iconCx + dp(16f)
+        val textMaxW = (chipRect.left - dp(8f) - textLeft).coerceAtLeast(dp(30f))
+        titlePaint.textSize = dp(12f)
+        titlePaint.color = Color.WHITE
+        val label = TextUtils.ellipsize(state.title, titlePaint, textMaxW, TextUtils.TruncateAt.END).toString()
+        val baseline = cy - (titlePaint.descent() + titlePaint.ascent()) / 2f
+        canvas.drawText(label, textLeft, baseline, titlePaint)
+    }
+
+    private fun drawCompactNotification(canvas: Canvas, accentArgb: Int, topSafePx: Float) {
+        val cy = topSafePx + (pillRect.bottom - topSafePx) / 2f
+        val iconR = dp(15.5f)
+        val iconCx = pillRect.left + dp(14f) + iconR
+        val bmp = state.icon
+        if (bmp != null) {
+            drawCircularBitmap(canvas, bmp, iconCx, cy, iconR)
+        } else {
+            chipPaint.color = withAlpha(accentArgb, 60)
+            canvas.drawCircle(iconCx, cy, iconR, chipPaint)
+        }
+
+        val pipR = dp(13f)
+        val pipCx = pillRect.right - dp(14f) - pipR
+        chipPaint.color = Color.argb(28, 255, 255, 255)
+        canvas.drawCircle(pipCx, cy, pipR, chipPaint)
+        drawFloatingWindowGlyph(canvas, pipCx, cy, dp(6.5f), accentArgb)
+
+        val textLeft = iconCx + iconR + dp(10f)
+        val textMaxW = (pipCx - pipR - dp(8f) - textLeft).coerceAtLeast(dp(40f))
+
+        titlePaint.textSize = dp(12.5f)
+        titlePaint.color = Color.WHITE
+        val topLine = TextUtils.ellipsize(
+            state.title.ifBlank { "Notificación" },
             titlePaint,
             textMaxW,
             TextUtils.TruncateAt.END
         ).toString()
-        val baseline = cy - (titlePaint.descent() + titlePaint.ascent()) / 2f
-        canvas.drawText(ellipsized, textLeft, baseline, titlePaint)
+        canvas.drawText(topLine, textLeft, cy - dp(2.5f), titlePaint)
+
+        subtitlePaint.textSize = dp(11f)
+        subtitlePaint.color = Color.argb(185, 214, 222, 236)
+        val bottomLine = TextUtils.ellipsize(
+            state.subtitle.ifBlank { "Toca: flotante · Sostén: leer" },
+            subtitlePaint,
+            textMaxW,
+            TextUtils.TruncateAt.END
+        ).toString()
+        canvas.drawText(bottomLine, textLeft, cy + dp(12.5f), subtitlePaint)
     }
 
-    private fun drawExpandedMedia(canvas: Canvas, primaryArgb: Int, secondaryArgb: Int) {
+    private fun drawExpandedMedia(canvas: Canvas, primaryArgb: Int, secondaryArgb: Int, topSafePx: Float) {
         val padH = dp(18f)
-        val artSize = dp(46f)
+        val artSize = dp(44f)
         val artLeft = pillRect.left + padH
-        val artTop = pillRect.top + dp(16f)
+        val artTop = topSafePx + dp(6f)
         mediaHeaderRect.set(pillRect.left, pillRect.top, pillRect.right, artTop + artSize + dp(4f))
 
         val bmp = state.icon
@@ -527,7 +774,7 @@ class DynamicIslandView(context: Context) : View(context) {
         val textLeft = artLeft + artSize + dp(12f)
         val textMaxW = (eqStart - dp(10f) - textLeft).coerceAtLeast(dp(40f))
 
-        titlePaint.textSize = dp(14f)
+        titlePaint.textSize = dp(13.8f)
         titlePaint.color = Color.WHITE
         val title = TextUtils.ellipsize(
             state.title.ifBlank { "Reproducción multimedia" },
@@ -537,7 +784,7 @@ class DynamicIslandView(context: Context) : View(context) {
         ).toString()
         canvas.drawText(title, textLeft, artCy - dp(3f), titlePaint)
 
-        subtitlePaint.textSize = dp(11.8f)
+        subtitlePaint.textSize = dp(11.5f)
         subtitlePaint.color = Color.argb(175, 214, 220, 232)
         val artist = TextUtils.ellipsize(
             state.subtitle.ifBlank { "Toca aquí para abrir la app" },
@@ -545,7 +792,7 @@ class DynamicIslandView(context: Context) : View(context) {
             textMaxW,
             TextUtils.TruncateAt.END
         ).toString()
-        canvas.drawText(artist, textLeft, artCy + dp(13f), subtitlePaint)
+        canvas.drawText(artist, textLeft, artCy + dp(12.5f), subtitlePaint)
 
         // Barra de progreso real de la canción
         val barY = artTop + artSize + dp(15f)
@@ -576,8 +823,8 @@ class DynamicIslandView(context: Context) : View(context) {
         chipPaint.shader = null
 
         // Botones Anterior / Play-Pausa / Siguiente
-        val controlsCy = pillRect.bottom - dp(25f)
-        val btnH = dp(34f)
+        val controlsCy = pillRect.bottom - dp(24f)
+        val btnH = dp(33f)
         val btnW = dp(66f)
         val gap = dp(14f)
         val totalW = btnW * 3f + gap * 2f
@@ -604,53 +851,11 @@ class DynamicIslandView(context: Context) : View(context) {
         drawSkipGlyph(canvas, nextRect.centerX(), nextRect.centerY(), dp(7.5f), next = true)
     }
 
-    private fun drawCompactNotification(canvas: Canvas, accentArgb: Int) {
-        val cy = pillRect.centerY()
-        val iconR = dp(16f)
-        val iconCx = pillRect.left + dp(12f) + iconR
-        val bmp = state.icon
-        if (bmp != null) {
-            drawCircularBitmap(canvas, bmp, iconCx, cy, iconR)
-        } else {
-            chipPaint.color = withAlpha(accentArgb, 60)
-            canvas.drawCircle(iconCx, cy, iconR, chipPaint)
-        }
-
-        val pipR = dp(13f)
-        val pipCx = pillRect.right - dp(12f) - pipR
-        chipPaint.color = Color.argb(28, 255, 255, 255)
-        canvas.drawCircle(pipCx, cy, pipR, chipPaint)
-        drawFloatingWindowGlyph(canvas, pipCx, cy, dp(6.5f), accentArgb)
-
-        val textLeft = iconCx + iconR + dp(10f)
-        val textMaxW = (pipCx - pipR - dp(8f) - textLeft).coerceAtLeast(dp(40f))
-
-        titlePaint.textSize = dp(12.5f)
-        titlePaint.color = Color.WHITE
-        val topLine = TextUtils.ellipsize(
-            state.title.ifBlank { "Notificación" },
-            titlePaint,
-            textMaxW,
-            TextUtils.TruncateAt.END
-        ).toString()
-        canvas.drawText(topLine, textLeft, cy - dp(2.5f), titlePaint)
-
-        subtitlePaint.textSize = dp(11f)
-        subtitlePaint.color = Color.argb(185, 214, 222, 236)
-        val bottomLine = TextUtils.ellipsize(
-            state.subtitle.ifBlank { "Toca: flotante · Sostén: leer" },
-            subtitlePaint,
-            textMaxW,
-            TextUtils.TruncateAt.END
-        ).toString()
-        canvas.drawText(bottomLine, textLeft, cy + dp(12.5f), subtitlePaint)
-    }
-
-    private fun drawExpandedNotification(canvas: Canvas, primaryArgb: Int, accentArgb: Int) {
+    private fun drawExpandedNotification(canvas: Canvas, primaryArgb: Int, accentArgb: Int, topSafePx: Float) {
         val padH = dp(16f)
-        val iconR = dp(18f)
+        val iconR = dp(17f)
         val iconCx = pillRect.left + padH + iconR
-        val iconCy = pillRect.top + dp(16f) + iconR
+        val iconCy = topSafePx + dp(6f) + iconR
 
         val bmp = state.icon
         if (bmp != null) {
@@ -663,7 +868,7 @@ class DynamicIslandView(context: Context) : View(context) {
         val textLeft = iconCx + iconR + dp(11f)
         val textMaxW = (pillRect.right - padH - textLeft).coerceAtLeast(dp(60f))
 
-        titlePaint.textSize = dp(13.5f)
+        titlePaint.textSize = dp(13.2f)
         titlePaint.color = Color.WHITE
         val header = TextUtils.ellipsize(
             state.title.ifBlank { "Notificación" },
@@ -673,7 +878,7 @@ class DynamicIslandView(context: Context) : View(context) {
         ).toString()
         canvas.drawText(header, textLeft, iconCy - dp(3f), titlePaint)
 
-        subtitlePaint.textSize = dp(11.5f)
+        subtitlePaint.textSize = dp(11.3f)
         subtitlePaint.color = Color.argb(190, 220, 226, 238)
         val sub = TextUtils.ellipsize(
             state.subtitle,
@@ -682,12 +887,11 @@ class DynamicIslandView(context: Context) : View(context) {
             TextUtils.TruncateAt.END
         ).toString()
         if (sub.isNotBlank()) {
-            canvas.drawText(sub, textLeft, iconCy + dp(12f), subtitlePaint)
+            canvas.drawText(sub, textLeft, iconCy + dp(11.5f), subtitlePaint)
         }
 
-        // Vista previa corta del mensaje (o aviso oculto si está bloqueado)
-        val previewY = iconCy + iconR + dp(16f)
-        subtitlePaint.textSize = dp(12f)
+        val previewY = iconCy + iconR + dp(15f)
+        subtitlePaint.textSize = dp(11.8f)
         subtitlePaint.color = Color.argb(225, 238, 242, 248)
         val previewLine = TextUtils.ellipsize(
             state.preview.ifBlank { "Toca abajo para abrir en ventana flotante" },
@@ -697,9 +901,8 @@ class DynamicIslandView(context: Context) : View(context) {
         ).toString()
         canvas.drawText(previewLine, pillRect.left + padH, previewY, subtitlePaint)
 
-        // Fila de botones: Ventana flotante + acciones rápidas reales (ej. Marcar leído)
-        val btnH = dp(32f)
-        val btnTop = pillRect.bottom - dp(14f) - btnH
+        val btnH = dp(31f)
+        val btnTop = pillRect.bottom - dp(13f) - btnH
         val gap = dp(8f)
         val actionsCount = state.notificationActionLabels.size.coerceAtMost(2)
         val totalBtns = 1 + actionsCount
@@ -733,52 +936,64 @@ class DynamicIslandView(context: Context) : View(context) {
         }
     }
 
-    private fun drawExpandedHub(canvas: Canvas, primaryArgb: Int, secondaryArgb: Int) {
+    private fun drawExpandedHub(canvas: Canvas, primaryArgb: Int, secondaryArgb: Int, topSafePx: Float) {
         val padH = dp(14f)
-        val topRowTop = pillRect.top + dp(16f)
-        val tileSize = dp(48f)
+        val topRowTop = topSafePx + dp(6f)
+        val tileSize = dp(46f)
         val gap = ((pillRect.width() - padH * 2f) - tileSize * 5f) / 4f
-        val labels = listOf("Buscar", "Linterna", "Silencio", "Captura", "Clips")
+        val soundLabel = when (state.ringerMode) {
+            AudioManager.RINGER_MODE_SILENT -> "Silencio"
+            AudioManager.RINGER_MODE_VIBRATE -> "Vibrar"
+            else -> "Sonido"
+        }
+        val labels = listOf("Buscar", "Linterna", soundLabel, "Captura", "Clips")
 
         for (i in 0 until 5) {
             val left = pillRect.left + padH + i * (tileSize + gap)
             hubTileRects[i].set(left, topRowTop, left + tileSize, topRowTop + tileSize + dp(14f))
 
-            val isActive = (i == 1 && state.flashlightOn) || (i == 2 && state.silentOn)
+            val isActive = (i == 1 && state.flashlightOn) || (i == 2 && state.ringerMode != AudioManager.RINGER_MODE_NORMAL)
             val cx = left + tileSize / 2f
             val cy = topRowTop + tileSize / 2f
 
             chipPaint.color = when {
                 i == 1 && state.flashlightOn -> withAlpha(COLOR_AMBER, 82)
-                i == 2 && state.silentOn -> withAlpha(primaryArgb, 84)
+                i == 2 && state.ringerMode == AudioManager.RINGER_MODE_SILENT -> withAlpha(COLOR_CORAL, 78)
+                i == 2 && state.ringerMode == AudioManager.RINGER_MODE_VIBRATE -> withAlpha(COLOR_AMBER, 78)
                 i == 0 -> withAlpha(primaryArgb, 48)
                 else -> Color.argb(26, 255, 255, 255)
             }
-            canvas.drawCircle(cx, cy, dp(21f), chipPaint)
+            canvas.drawCircle(cx, cy, dp(20f), chipPaint)
 
             val tint = when {
                 i == 1 && state.flashlightOn -> COLOR_AMBER
-                i == 2 && state.silentOn -> primaryArgb
+                i == 2 && state.ringerMode == AudioManager.RINGER_MODE_SILENT -> COLOR_CORAL
+                i == 2 && state.ringerMode == AudioManager.RINGER_MODE_VIBRATE -> COLOR_AMBER
+                i == 2 -> COLOR_GREEN
                 i == 0 -> primaryArgb
                 i == 4 -> secondaryArgb
                 else -> Color.WHITE
             }
             when (i) {
-                0 -> drawSearchGlyph(canvas, cx, cy, dp(8.5f), tint)
-                1 -> drawFlashlightGlyph(canvas, cx, cy, dp(8.5f), tint)
-                2 -> drawBellOffGlyph(canvas, cx, cy, dp(8.5f), tint)
-                3 -> drawScreenshotGlyph(canvas, cx, cy, dp(8f), tint)
-                4 -> drawClipboardGlyph(canvas, cx, cy, dp(8f), tint)
+                0 -> drawSearchGlyph(canvas, cx, cy, dp(8.2f), tint)
+                1 -> drawFlashlightGlyph(canvas, cx, cy, dp(8.2f), tint)
+                2 -> when (state.ringerMode) {
+                    AudioManager.RINGER_MODE_SILENT -> drawBellOffGlyph(canvas, cx, cy, dp(8.2f), tint)
+                    AudioManager.RINGER_MODE_VIBRATE -> drawVibrateGlyph(canvas, cx, cy, dp(8.2f), tint)
+                    else -> drawSoundOnGlyph(canvas, cx, cy, dp(8.2f), tint)
+                }
+                3 -> drawScreenshotGlyph(canvas, cx, cy, dp(7.8f), tint)
+                4 -> drawClipboardGlyph(canvas, cx, cy, dp(7.8f), tint)
             }
 
-            badgePaint.textSize = dp(9.8f)
+            badgePaint.textSize = dp(9.6f)
             badgePaint.color = if (isActive) Color.WHITE else Color.argb(185, 215, 222, 236)
             canvas.drawText(labels[i], cx, topRowTop + tileSize + dp(10f), badgePaint)
         }
 
         // Fila inferior: Cronómetro integrado rápido
-        val rowH = dp(34f)
-        val rowTop = pillRect.bottom - dp(14f) - rowH
+        val rowH = dp(33f)
+        val rowTop = pillRect.bottom - dp(13f) - rowH
         val rowRect = RectF(pillRect.left + padH, rowTop, pillRect.right - padH, rowTop + rowH)
         chipPaint.color = Color.argb(20, 255, 255, 255)
         canvas.drawRoundRect(rowRect, rowH / 2f, rowH / 2f, chipPaint)
@@ -787,15 +1002,15 @@ class DynamicIslandView(context: Context) : View(context) {
         val rowCy = rowRect.centerY()
         drawClockGlyph(canvas, clockCx, rowCy, dp(7.5f), if (state.stopwatchRunning) COLOR_AMBER else Color.WHITE)
 
-        titlePaint.textSize = dp(13f)
+        titlePaint.textSize = dp(12.8f)
         titlePaint.color = Color.WHITE
         val swText = "Cronómetro  ${state.stopwatchLabel}"
         val swBase = rowCy - (titlePaint.descent() + titlePaint.ascent()) / 2f
         canvas.drawText(swText, clockCx + dp(14f), swBase, titlePaint)
 
-        val btnW = dp(64f)
+        val btnW = dp(62f)
         val btnH = dp(24f)
-        hubStopwatchResetRect.set(rowRect.right - dp(6f) - dp(54f), rowCy - btnH / 2f, rowRect.right - dp(6f), rowCy + btnH / 2f)
+        hubStopwatchResetRect.set(rowRect.right - dp(6f) - dp(52f), rowCy - btnH / 2f, rowRect.right - dp(6f), rowCy + btnH / 2f)
         hubStopwatchToggleRect.set(hubStopwatchResetRect.left - dp(6f) - btnW, rowCy - btnH / 2f, hubStopwatchResetRect.left - dp(6f), rowCy + btnH / 2f)
 
         chipPaint.color = if (state.stopwatchRunning) withAlpha(COLOR_AMBER, 85) else withAlpha(primaryArgb, 82)
@@ -810,139 +1025,7 @@ class DynamicIslandView(context: Context) : View(context) {
         canvas.drawText("Cero", hubStopwatchResetRect.centerX(), btnBase, badgePaint)
     }
 
-    private fun drawCharging(canvas: Canvas) {
-        val cy = pillRect.centerY()
-        val boltCx = pillRect.left + dp(18f)
-        val pulseAlpha = (160 + 95 * sin(pulsePhase * Math.PI * 2.0)).toInt().coerceIn(90, 255)
-        drawBoltGlyph(canvas, boltCx, cy, dp(8f), withAlpha(COLOR_GREEN, pulseAlpha))
-
-        titlePaint.textSize = dp(12f)
-        titlePaint.color = Color.WHITE
-        val label = state.title.ifBlank { "Cargando" }
-        val base = cy - (titlePaint.descent() + titlePaint.ascent()) / 2f
-        canvas.drawText(label, boltCx + dp(13f), base, titlePaint)
-
-        val pctText = "${state.batteryPercent.coerceIn(0, 100)}%"
-        titlePaint.color = COLOR_GREEN
-        val pctW = titlePaint.measureText(pctText)
-        canvas.drawText(pctText, pillRect.right - dp(14f) - pctW, base, titlePaint)
-    }
-
-    private fun drawBluetooth(canvas: Canvas) {
-        val cy = pillRect.centerY()
-        val iconCx = pillRect.left + dp(18f)
-        drawBluetoothGlyph(canvas, iconCx, cy, dp(7.5f), COLOR_BLUE)
-
-        val badgeW = dp(58f)
-        val textLeft = iconCx + dp(14f)
-        val maxW = (pillRect.right - badgeW - dp(12f) - textLeft).coerceAtLeast(dp(36f))
-        titlePaint.textSize = dp(11.8f)
-        titlePaint.color = Color.WHITE
-        val name = TextUtils.ellipsize(
-            state.title.ifBlank { "Bluetooth" },
-            titlePaint,
-            maxW,
-            TextUtils.TruncateAt.END
-        ).toString()
-        val base = cy - (titlePaint.descent() + titlePaint.ascent()) / 2f
-        canvas.drawText(name, textLeft, base, titlePaint)
-
-        subtitlePaint.textSize = dp(10.5f)
-        subtitlePaint.color = COLOR_BLUE
-        val tag = "Conectado"
-        val tw = subtitlePaint.measureText(tag)
-        canvas.drawText(tag, pillRect.right - dp(12f) - tw, base, subtitlePaint)
-    }
-
-    private fun drawCall(canvas: Canvas) {
-        val cy = pillRect.centerY()
-        val iconCx = pillRect.left + dp(18f)
-        val pulseAlpha = (170 + 85 * sin(pulsePhase * Math.PI * 2.0)).toInt().coerceIn(100, 255)
-        chipPaint.color = withAlpha(COLOR_GREEN, 48)
-        canvas.drawCircle(iconCx, cy, dp(11.5f), chipPaint)
-        drawPhoneGlyph(canvas, iconCx, cy, dp(6.8f), withAlpha(COLOR_GREEN, pulseAlpha))
-
-        val timeText = state.badge.ifBlank { "00:00" }
-        titlePaint.textSize = dp(11.5f)
-        titlePaint.color = COLOR_GREEN
-        val timeW = titlePaint.measureText(timeText)
-        val base = cy - (titlePaint.descent() + titlePaint.ascent()) / 2f
-        canvas.drawText(timeText, pillRect.right - dp(13f) - timeW, base, titlePaint)
-
-        val textLeft = iconCx + dp(16f)
-        val maxW = (pillRect.right - dp(20f) - timeW - textLeft).coerceAtLeast(dp(30f))
-        titlePaint.color = Color.WHITE
-        val caller = TextUtils.ellipsize(
-            state.title.ifBlank { "En llamada" },
-            titlePaint,
-            maxW,
-            TextUtils.TruncateAt.END
-        ).toString()
-        canvas.drawText(caller, textLeft, base, titlePaint)
-    }
-
-    private fun drawStopwatch(canvas: Canvas) {
-        val cy = pillRect.centerY()
-        val iconCx = pillRect.left + dp(17f)
-        drawClockGlyph(canvas, iconCx, cy, dp(7f), COLOR_AMBER)
-
-        titlePaint.textSize = dp(12f)
-        titlePaint.color = Color.WHITE
-        val base = cy - (titlePaint.descent() + titlePaint.ascent()) / 2f
-        canvas.drawText(state.title.ifBlank { "Cronómetro" }, iconCx + dp(14f), base, titlePaint)
-
-        titlePaint.color = COLOR_AMBER
-        val time = state.stopwatchLabel
-        val tw = titlePaint.measureText(time)
-        canvas.drawText(time, pillRect.right - dp(14f) - tw, base, titlePaint)
-    }
-
-    private fun drawSilentTimer(canvas: Canvas, accentArgb: Int) {
-        val cy = pillRect.centerY()
-        val iconCx = pillRect.left + dp(17f)
-        drawBellOffGlyph(canvas, iconCx, cy, dp(6.8f), accentArgb)
-
-        titlePaint.textSize = dp(11.5f)
-        titlePaint.color = Color.WHITE
-        val textLeft = iconCx + dp(14f)
-        val maxW = (pillRect.right - dp(12f) - textLeft).coerceAtLeast(dp(24f))
-        val text = TextUtils.ellipsize(state.title, titlePaint, maxW, TextUtils.TruncateAt.END).toString()
-        val baseline = cy - (titlePaint.descent() + titlePaint.ascent()) / 2f
-        canvas.drawText(text, textLeft, baseline, titlePaint)
-    }
-
-    private fun drawActionAlert(canvas: Canvas, accentArgb: Int, isScreenshot: Boolean) {
-        val cy = pillRect.centerY()
-        val iconCx = pillRect.left + dp(18f)
-        if (isScreenshot) {
-            drawScreenshotGlyph(canvas, iconCx, cy, dp(7f), accentArgb)
-        } else {
-            drawClipboardGlyph(canvas, iconCx, cy, dp(7f), accentArgb)
-        }
-
-        val chipW = dp(44f)
-        val chipH = dp(22f)
-        val chipRect = RectF(
-            pillRect.right - dp(9f) - chipW,
-            cy - chipH / 2f,
-            pillRect.right - dp(9f),
-            cy + chipH / 2f
-        )
-        chipPaint.color = withAlpha(accentArgb, 75)
-        canvas.drawRoundRect(chipRect, chipH / 2f, chipH / 2f, chipPaint)
-        badgePaint.textSize = dp(10.5f)
-        badgePaint.color = Color.WHITE
-        val chipBaseline = cy - (badgePaint.descent() + badgePaint.ascent()) / 2f
-        canvas.drawText(state.badge.ifBlank { "Abrir" }, chipRect.centerX(), chipBaseline, badgePaint)
-
-        val textLeft = iconCx + dp(15f)
-        val textMaxW = (chipRect.left - dp(6f) - textLeft).coerceAtLeast(dp(30f))
-        titlePaint.textSize = dp(12f)
-        titlePaint.color = Color.WHITE
-        val label = TextUtils.ellipsize(state.title, titlePaint, textMaxW, TextUtils.TruncateAt.END).toString()
-        val baseline = cy - (titlePaint.descent() + titlePaint.ascent()) / 2f
-        canvas.drawText(label, textLeft, baseline, titlePaint)
-    }
+    // ---- Dibujo de iconos vectoriales ----
 
     private fun drawEqualizer(
         canvas: Canvas,
@@ -1048,6 +1131,28 @@ class DynamicIslandView(context: Context) : View(context) {
         }
         canvas.drawPath(path, iconPaint)
         canvas.drawLine(cx - r * 0.75f, cy - r * 0.65f, cx + r * 0.75f, cy + r * 0.72f, iconPaint)
+    }
+
+    private fun drawVibrateGlyph(canvas: Canvas, cx: Float, cy: Float, r: Float, color: Int) {
+        iconPaint.color = color
+        iconPaint.strokeWidth = dp(1.6f)
+        canvas.drawRoundRect(cx - r * 0.42f, cy - r * 0.72f, cx + r * 0.42f, cy + r * 0.72f, dp(2f), dp(2f), iconPaint)
+        canvas.drawLine(cx - r * 0.78f, cy - r * 0.42f, cx - r * 0.78f, cy + r * 0.42f, iconPaint)
+        canvas.drawLine(cx + r * 0.78f, cy - r * 0.42f, cx + r * 0.78f, cy + r * 0.42f, iconPaint)
+    }
+
+    private fun drawSoundOnGlyph(canvas: Canvas, cx: Float, cy: Float, r: Float, color: Int) {
+        iconPaint.color = color
+        iconPaint.strokeWidth = dp(1.6f)
+        val path = Path().apply {
+            moveTo(cx - r * 0.65f, cy + r * 0.45f)
+            lineTo(cx - r * 0.5f, cy - r * 0.22f)
+            quadTo(cx, cy - r * 0.95f, cx + r * 0.5f, cy - r * 0.22f)
+            lineTo(cx + r * 0.65f, cy + r * 0.45f)
+            close()
+        }
+        canvas.drawPath(path, iconPaint)
+        canvas.drawCircle(cx, cy + r * 0.72f, dp(1.3f), fillGlyphPaint.apply { this.color = color })
     }
 
     private fun drawClockGlyph(canvas: Canvas, cx: Float, cy: Float, r: Float, color: Int) {
@@ -1158,5 +1263,6 @@ class DynamicIslandView(context: Context) : View(context) {
         private const val COLOR_GREEN = 0xFF34D399.toInt()
         private const val COLOR_BLUE = 0xFF38BDF8.toInt()
         private const val COLOR_AMBER = 0xFFFBBF24.toInt()
+        private const val COLOR_CORAL = 0xFFFB7185.toInt()
     }
 }

@@ -93,10 +93,14 @@ fun MainScreen(
 ) {
     val context = LocalContext.current
     var tab by rememberSaveable { mutableStateOf(MainTab.SEARCH) }
+    var settingsSection by remember { mutableStateOf(SettingsSectionFilter.OVERVIEW) }
     var spotlightMode by remember { mutableStateOf(Prefs.mainSpotlightMode(context)) }
 
     LaunchedEffect(settingsRequest) {
-        if (settingsRequest > 0) tab = MainTab.SETTINGS
+        if (settingsRequest > 0) {
+            settingsSection = SettingsSectionFilter.OVERVIEW
+            tab = MainTab.SETTINGS
+        }
     }
 
     val pinSpotlightShortcut: () -> Unit = {
@@ -244,7 +248,10 @@ fun MainScreen(
                             onItemClick = onItemClick,
                             onTogglePin = onTogglePin,
                             onOpenFloating = onOpenFloating,
-                            onOpenGestureSettings = { tab = MainTab.SETTINGS },
+                            onOpenGestureSettings = {
+                                settingsSection = SettingsSectionFilter.GESTURES
+                                tab = MainTab.SETTINGS
+                            },
                             onPinSpotlightShortcut = pinSpotlightShortcut,
                             header = searchHeader,
                             modifier = Modifier
@@ -303,6 +310,7 @@ fun MainScreen(
                         onRequestBatteryExemption = onRequestBatteryExemption,
                         onOpenHomeSettings = onOpenHomeSettings,
                         onRefresh = onRefresh,
+                        initialSection = settingsSection,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(padding)

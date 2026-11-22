@@ -240,6 +240,13 @@ object Prefs {
         prefs(context).edit().putInt("dynamic_island_idle_height", heightDp.coerceIn(22, 40)).apply()
     }
 
+    fun dynamicIslandCameraGap(context: Context): Int =
+        prefs(context).getInt("dynamic_island_camera_gap", 36).coerceIn(0, 68)
+
+    fun setDynamicIslandCameraGap(context: Context, gapDp: Int) {
+        prefs(context).edit().putInt("dynamic_island_camera_gap", gapDp.coerceIn(0, 68)).apply()
+    }
+
     fun dynamicIslandHideLandscape(context: Context): Boolean =
         prefs(context).getBoolean("dynamic_island_hide_landscape", true)
 

@@ -109,7 +109,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -134,12 +136,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
-private enum class SettingsSectionFilter(val label: String, val icon: ImageVector) {
-    ALL("Todo", Icons.Filled.Tune),
-    THEMES("Temas y Panel", Icons.Filled.ColorLens),
-    TOUCH("Área Táctil", Icons.Filled.TouchApp),
-    PAGES("Páginas", Icons.Filled.ViewCarousel),
-    SYSTEM("Sistema", Icons.Filled.Settings)
+enum class SettingsSectionFilter(val label: String, val subtitle: String, val icon: ImageVector) {
+    OVERVIEW("Resumen", "Accesos directos a cada apartado", Icons.Filled.Home),
+    ISLAND("Isla", "Cámara perforada, música, avisos y Hub", Icons.Filled.Layers),
+    GESTURES("Gestos", "Elige qué hace cada uno de los 6 gestos", Icons.Filled.Gesture),
+    TOUCH("Tirador", "Barra viva, color y zona táctil lateral", Icons.Filled.TouchApp),
+    THEMES("Tema y Panel", "Estilos, modo claro y tamaño del panel", Icons.Filled.ColorLens),
+    PAGES("Páginas", "Orden del carrusel y desplazamiento infinito", Icons.Filled.ViewCarousel),
+    SYSTEM("Sistema", "Permisos, contactos, uso y batería", Icons.Filled.Settings)
 }
 
 @Composable
@@ -157,7 +161,8 @@ fun SettingsScreen(
     onRequestBatteryExemption: () -> Unit,
     onOpenHomeSettings: () -> Unit,
     onRefresh: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    initialSection: SettingsSectionFilter = SettingsSectionFilter.OVERVIEW
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -178,7 +183,7 @@ fun SettingsScreen(
     val usageGranted = remember(resumeTick) { UsageStore(context).hasUsageAccess() }
     val mediaAccessGranted = remember(resumeTick) { MediaControlService.isAuthorized(context) }
 
-    var activeFilter by remember { mutableStateOf(SettingsSectionFilter.ALL) }
+    var activeFilter by remember(initialSection) { mutableStateOf(initialSection) }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -193,46 +198,65 @@ fun SettingsScreen(
             )
         }
 
-        // Tarjeta principal de estado del panel lateral
-        item {
-            PanelHeroCard(
-                panelEnabled = panelEnabled,
-                panelSide = panelSide,
-                overlayGranted = overlayGranted,
-                batteryUnrestricted = batteryUnrestricted,
-                onTogglePanel = onTogglePanel,
-                onSideChange = onSideChange,
-                onOpenOverlayPermission = onOpenOverlayPermission,
-                onRequestBatteryExemption = onRequestBatteryExemption
-            )
-        }
-
-        // 1. Temas elaborados y apariencia del panel
-        if (activeFilter == SettingsSectionFilter.ALL || activeFilter == SettingsSectionFilter.THEMES) {
+        // En Resumen mostramos el estado general + tarjetas limpias por apartado
+        if (activeFilter == SettingsSectionFilter.OVERVIEW) {
             item {
-                PanelAppearanceCard()
+                PanelHeroCard(
+                    panelEnabled = panelEnabled,
+                    panelSide = panelSide,
+                    overlayGranted = overlayGranted,
+                    batteryUnrestricted = batteryUnrestricted,
+                    onTogglePanel = onTogglePanel,
+                    onSideChange = onSideChange,
+                    onOpenOverlayPermission = onOpenOverlayPermission,
+                    onRequestBatteryExemption = onRequestBatteryExemption
+                )
+            }
+            item {
+                SettingsCategoryHub(onSelect = { activeFilter = it })
             }
         }
 
-        // 2. Isla Dinámica + Estudio interactivo de Zona de Activación y Gestos
-        if (activeFilter == SettingsSectionFilter.ALL || activeFilter == SettingsSectionFilter.TOUCH) {
+        // Apartado 1: Isla Dinámica OLED y calibración de cámara
+        if (activeFilter == SettingsSectionFilter.ISLAND) {
             item {
                 DynamicIslandCard()
+            }
+        }
+
+        // Apartado 2: Gestos personalizables del borde
+        if (activeFilter == SettingsSectionFilter.GESTURES) {
+            item {
+                EdgeGesturesCard()
+            }
+        }
+
+        // Apartado 3: Barra viva lateral y calibrador del tirador
+        if (activeFilter == SettingsSectionFilter.TOUCH) {
+            item {
+                EdgeLiveAlertsCard()
             }
             item {
                 ActivationZoneCard(side = panelSide)
             }
         }
 
-        // 3. Orden y visibilidad de páginas del panel
-        if (activeFilter == SettingsSectionFilter.ALL || activeFilter == SettingsSectionFilter.PAGES) {
+        // Apartado 4: Temas y apariencia del panel
+        if (activeFilter == SettingsSectionFilter.THEMES) {
+            item {
+                PanelAppearanceCard()
+            }
+        }
+
+        // Apartado 5: Orden y visibilidad de páginas del panel
+        if (activeFilter == SettingsSectionFilter.PAGES) {
             item {
                 PanelOrderCard()
             }
         }
 
-        // 4. Búsqueda, Inteligencia de uso, Índice y Teclado
-        if (activeFilter == SettingsSectionFilter.ALL || activeFilter == SettingsSectionFilter.SYSTEM) {
+        // Apartado 6: Sistema, permisos y diagnóstico
+        if (activeFilter == SettingsSectionFilter.SYSTEM) {
             item {
                 SettingsSectionCard(
                     title = "Búsqueda y respuesta",
@@ -1244,30 +1268,210 @@ private fun PanelPreviewCard(config: PanelPreviewConfig) {
 }
 
 @Composable
+private fun SettingsCategoryHub(onSelect: (SettingsSectionFilter) -> Unit) {
+    val sections = remember {
+        SettingsSectionFilter.entries.filter { it != SettingsSectionFilter.OVERVIEW }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "APARTADOS DE CONFIGURACIÓN",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            letterSpacing = 0.8.sp,
+            modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
+        )
+        sections.forEach { section ->
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSelect(section) },
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
+                border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = section.icon,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = section.label,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = section.subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EdgeGesturesCard() {
+    SettingsSectionCard(
+        title = "Gestos personalizables del borde",
+        subtitle = "Elige exactamente qué hace cada gesto o abre cualquier app",
+        icon = Icons.Filled.Gesture,
+        badgeText = "6 gestos",
+        badgeActive = true
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+            GestureCustomizationSection()
+            Spacer(Modifier.height(6.dp))
+        }
+    }
+}
+
+@Composable
+private fun EdgeLiveAlertsCard() {
+    val context = LocalContext.current
+    var pulseCopy by remember { mutableStateOf(Prefs.edgePulseOnCopy(context)) }
+    var pulseScreenshot by remember { mutableStateOf(Prefs.edgePulseOnScreenshot(context)) }
+    var pulseNotification by remember { mutableStateOf(Prefs.edgePulseOnNotification(context)) }
+
+    SettingsSectionCard(
+        title = "Barra viva (avisos laterales)",
+        subtitle = "La barra del borde se ilumina 4 segundos con onda luminosa; tócala para actuar",
+        icon = Icons.Filled.Layers,
+        badgeText = if (pulseCopy || pulseScreenshot || pulseNotification) "Activa" else "Inactiva",
+        badgeActive = pulseCopy || pulseScreenshot || pulseNotification
+    ) {
+        SwitchRow(
+            title = "Animar al copiar texto",
+            subtitle = "Pulso lateral con icono de portapapeles; tocar abre acciones rápidas",
+            checked = pulseCopy,
+            onCheckedChange = {
+                pulseCopy = it
+                Prefs.setEdgePulseOnCopy(context, it)
+            }
+        )
+        SectionDivider()
+        SwitchRow(
+            title = "Animar con capturas de pantalla",
+            subtitle = "Se ilumina al tomar una captura para verla, compartirla o borrarla",
+            checked = pulseScreenshot,
+            onCheckedChange = {
+                pulseScreenshot = it
+                Prefs.setEdgePulseOnScreenshot(context, it)
+            }
+        )
+        SectionDivider()
+        SwitchRow(
+            title = "Animar con notificaciones",
+            subtitle = "Muestra el icono de la app que notifica y abre en ventana flotante al tocar",
+            checked = pulseNotification,
+            onCheckedChange = {
+                pulseNotification = it
+                Prefs.setEdgePulseOnNotification(context, it)
+            }
+        )
+    }
+}
+
+@Composable
 private fun DynamicIslandCard() {
     val context = LocalContext.current
+    val hostView = LocalView.current
     var enabled by remember { mutableStateOf(Prefs.dynamicIslandEnabled(context)) }
     var idlePill by remember { mutableStateOf(Prefs.dynamicIslandIdlePill(context)) }
     var media by remember { mutableStateOf(Prefs.dynamicIslandMedia(context)) }
     var notifications by remember { mutableStateOf(Prefs.dynamicIslandNotifications(context)) }
     var hideLandscape by remember { mutableStateOf(Prefs.dynamicIslandHideLandscape(context)) }
+    var liveGuide by remember { mutableStateOf(false) }
+
     var topOffset by remember { mutableFloatStateOf(Prefs.dynamicIslandTopOffset(context).toFloat()) }
     var xOffset by remember { mutableFloatStateOf(Prefs.dynamicIslandHorizontalOffset(context).toFloat()) }
+    var cameraGap by remember { mutableFloatStateOf(Prefs.dynamicIslandCameraGap(context).toFloat()) }
     var idleWidth by remember { mutableFloatStateOf(Prefs.dynamicIslandIdleWidth(context).toFloat()) }
     var idleHeight by remember { mutableFloatStateOf(Prefs.dynamicIslandIdleHeight(context).toFloat()) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            EdgePanelService.setIslandCalibrationPreview(false)
+        }
+    }
 
     val themeSpec = remember(Prefs.themeRevision) {
         Prefs.panelStyle(context).visualSpec(light = false)
     }
 
+    val detectCameraCutout: () -> Unit = {
+        val density = context.resources.displayMetrics.density.coerceAtLeast(1f)
+        val screenW = context.resources.displayMetrics.widthPixels
+        val cutout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            hostView.rootWindowInsets?.displayCutout
+        } else null
+        val rect = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            cutout?.boundingRects?.firstOrNull { it.top < (120 * density) }
+        } else null
+
+        if (rect != null && rect.width() > 0 && rect.height() > 0) {
+            val topDp = (rect.top / density).roundToInt().coerceIn(0, 48)
+            val centerOffsetDp = ((rect.centerX() - screenW / 2f) / density).roundToInt().coerceIn(-64, 64)
+            val holeWidthDp = (rect.width() / density).roundToInt()
+            val holeHeightDp = (rect.height() / density).roundToInt()
+            val safeGapDp = (holeWidthDp + 10).coerceIn(20, 68)
+            val pillW = (safeGapDp + 44).coerceIn(76, 140)
+            val pillH = (holeHeightDp + 6).coerceIn(24, 38)
+
+            topOffset = topDp.toFloat()
+            xOffset = centerOffsetDp.toFloat()
+            cameraGap = safeGapDp.toFloat()
+            idleWidth = pillW.toFloat()
+            idleHeight = pillH.toFloat()
+
+            Prefs.setDynamicIslandTopOffset(context, topDp)
+            Prefs.setDynamicIslandHorizontalOffset(context, centerOffsetDp)
+            Prefs.setDynamicIslandCameraGap(context, safeGapDp)
+            Prefs.setDynamicIslandIdleWidth(context, pillW)
+            Prefs.setDynamicIslandIdleHeight(context, pillH)
+            liveGuide = true
+            EdgePanelService.setIslandCalibrationPreview(true)
+            EdgePanelService.refresh(context)
+            Toast.makeText(context, "Cámara detectada (${holeWidthDp}×${holeHeightDp} dp)", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "No se detectó recorte de cámara; ajusta manualmente con la guía en vivo", Toast.LENGTH_LONG).show()
+        }
+    }
+
     SettingsSectionCard(
         title = "Isla Dinámica OLED",
-        subtitle = "Negro puro fundido con la cámara · Hub rápido, música, llamadas, carga, Bluetooth y burbuja dividida",
+        subtitle = "Negro puro fundido con la cámara · Música, silencio/vibrar, llamadas, carga, Bluetooth y Hub",
         icon = Icons.Filled.Layers,
         badgeText = if (enabled) "Activa" else "Inactiva",
         badgeActive = enabled
     ) {
-        // Vista previa OLED negra pura con burbuja dividida
+        // Vista previa OLED mostrando la zona segura de la cámara (izquierda | cámara | derecha)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1283,9 +1487,11 @@ private fun DynamicIslandCard() {
                     .height(38.dp)
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 12.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Box(
                         modifier = Modifier
@@ -1301,24 +1507,14 @@ private fun DynamicIslandCard() {
                             modifier = Modifier.size(13.dp)
                         )
                     }
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = "Nexo OLED",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "Toca · Sostén · Desliza",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontSize = 9.sp,
-                            color = Color(0xFFB4BCD0),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                    // Lente físico de la cámara en el centro (sin texto encima)
+                    Box(
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF1A1E28))
+                            .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.6f), CircleShape)
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.width(2.5.dp).height(7.dp).clip(CircleShape).background(themeSpec.primary))
                         Box(Modifier.width(2.5.dp).height(13.dp).clip(CircleShape).background(themeSpec.secondary))
@@ -1327,7 +1523,6 @@ private fun DynamicIslandCard() {
                 }
             }
             Spacer(Modifier.width(8.dp))
-            // Satélite de burbuja dividida
             Surface(
                 shape = CircleShape,
                 color = Color.Black,
@@ -1346,11 +1541,15 @@ private fun DynamicIslandCard() {
 
         SwitchRow(
             title = "Activar Isla Dinámica OLED",
-            subtitle = "Muestra música, notificaciones, llamadas, carga, Bluetooth, cronómetro y Hub rápido",
+            subtitle = "Funciona sobre todas las apps: música, silencio/vibración/normal, llamadas, carga, Bluetooth y Hub",
             checked = enabled,
             onCheckedChange = {
                 enabled = it
                 Prefs.setDynamicIslandEnabled(context, it)
+                if (!it) {
+                    liveGuide = false
+                    EdgePanelService.setIslandCalibrationPreview(false)
+                }
                 EdgePanelService.refresh(context)
             }
         )
@@ -1359,7 +1558,7 @@ private fun DynamicIslandCard() {
             SectionDivider()
             SwitchRow(
                 title = "Cápsula siempre visible sobre la cámara",
-                subtitle = "Toca la cápsula negra en reposo para abrir el Hub rápido (Spotlight, Linterna, Silencio, Captura, Cronómetro)",
+                subtitle = "Toca la cápsula negra en reposo para abrir el Hub rápido (Spotlight, Linterna, Sonido, Captura, Cronómetro)",
                 checked = idlePill,
                 onCheckedChange = {
                     idlePill = it
@@ -1369,7 +1568,7 @@ private fun DynamicIslandCard() {
             )
             SwitchRow(
                 title = "Notificaciones interactivas",
-                subtitle = "Toque corto abre en ventana flotante; mantener pulsado o bajar lee vista previa y acciones",
+                subtitle = "Toque corto abre en ventana flotante; mantener pulsado o deslizar abajo lee y muestra acciones",
                 checked = notifications,
                 onCheckedChange = {
                     notifications = it
@@ -1378,8 +1577,8 @@ private fun DynamicIslandCard() {
                 }
             )
             SwitchRow(
-                title = "Reproductor completo en la isla",
-                subtitle = "Carátula del álbum, barra de progreso en vivo, controles y burbuja dividida",
+                title = "Reproductor en vivo (se cierra al pausar)",
+                subtitle = "Carátula del álbum, barra de progreso real y controles; vuelve a reposo al pausar",
                 checked = media,
                 onCheckedChange = {
                     media = it
@@ -1397,14 +1596,48 @@ private fun DynamicIslandCard() {
                     EdgePanelService.refresh(context)
                 }
             )
+
+            SectionDivider()
+
+            SwitchRow(
+                title = "Ver guía en vivo sobre tu cámara",
+                subtitle = "Muestra la isla real arriba con un aro guía azul para alinearla con tu lente físico",
+                checked = liveGuide,
+                onCheckedChange = {
+                    liveGuide = it
+                    EdgePanelService.setIslandCalibrationPreview(it)
+                }
+            )
+
             Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilledTonalButton(
+                        onClick = detectCameraCutout,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Text("Detectar cámara", style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                    }
+                    OutlinedButton(
+                        onClick = { EdgePanelService.triggerIslandTestAlert(context) },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Text("Probar aviso", style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "CALIBRACIÓN CON LA CÁMARA",
+                        text = "AJUSTE FINO DEL HUECO DE CÁMARA",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary,
@@ -1414,26 +1647,49 @@ private fun DynamicIslandCard() {
                         onClick = {
                             topOffset = 8f
                             xOffset = 0f
+                            cameraGap = 36f
                             idleWidth = 96f
                             idleHeight = 28f
                             Prefs.setDynamicIslandTopOffset(context, 8)
                             Prefs.setDynamicIslandHorizontalOffset(context, 0)
+                            Prefs.setDynamicIslandCameraGap(context, 36)
                             Prefs.setDynamicIslandIdleWidth(context, 96)
                             Prefs.setDynamicIslandIdleHeight(context, 28)
                             EdgePanelService.refresh(context)
                         },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                     ) {
-                        Text("Centrar", style = MaterialTheme.typography.labelSmall)
+                        Text("Restablecer", style = MaterialTheme.typography.labelSmall)
                     }
                 }
+
+                SteppedSlider(
+                    label = "Espacio central para la cámara",
+                    valueText = "${cameraGap.roundToInt()} dp",
+                    value = cameraGap,
+                    valueRange = 0f..68f,
+                    stepAmount = 2f,
+                    onValueChange = {
+                        cameraGap = it
+                        Prefs.setDynamicIslandCameraGap(context, it.roundToInt())
+                        if (liveGuide) EdgePanelService.setIslandCalibrationPreview(true)
+                    },
+                    onValueChangeFinished = {
+                        Prefs.setDynamicIslandCameraGap(context, cameraGap.roundToInt())
+                        EdgePanelService.refresh(context)
+                    }
+                )
                 SteppedSlider(
                     label = "Posición vertical (Y)",
                     valueText = "${topOffset.roundToInt()} dp",
                     value = topOffset,
                     valueRange = 0f..48f,
                     stepAmount = 1f,
-                    onValueChange = { topOffset = it },
+                    onValueChange = {
+                        topOffset = it
+                        Prefs.setDynamicIslandTopOffset(context, it.roundToInt())
+                        if (liveGuide) EdgePanelService.setIslandCalibrationPreview(true)
+                    },
                     onValueChangeFinished = {
                         Prefs.setDynamicIslandTopOffset(context, topOffset.roundToInt())
                         EdgePanelService.refresh(context)
@@ -1445,7 +1701,11 @@ private fun DynamicIslandCard() {
                     value = xOffset,
                     valueRange = -64f..64f,
                     stepAmount = 2f,
-                    onValueChange = { xOffset = it },
+                    onValueChange = {
+                        xOffset = it
+                        Prefs.setDynamicIslandHorizontalOffset(context, it.roundToInt())
+                        if (liveGuide) EdgePanelService.setIslandCalibrationPreview(true)
+                    },
                     onValueChangeFinished = {
                         Prefs.setDynamicIslandHorizontalOffset(context, xOffset.roundToInt())
                         EdgePanelService.refresh(context)
@@ -1495,9 +1755,6 @@ private fun ActivationZoneCard(side: PanelSide) {
     var activatorColor by remember { mutableIntStateOf(Prefs.activatorColor(context)) }
     var activatorOpacity by remember { mutableFloatStateOf(Prefs.activatorOpacity(context)) }
     var syncTheme by remember { mutableStateOf(Prefs.activatorSyncTheme(context)) }
-    var pulseCopy by remember { mutableStateOf(Prefs.edgePulseOnCopy(context)) }
-    var pulseScreenshot by remember { mutableStateOf(Prefs.edgePulseOnScreenshot(context)) }
-    var pulseNotification by remember { mutableStateOf(Prefs.edgePulseOnNotification(context)) }
 
     val themeSpec = remember(Prefs.themeRevision) {
         Prefs.panelStyle(context).visualSpec(light = Prefs.panelLightBackground(context))
@@ -1525,8 +1782,8 @@ private fun ActivationZoneCard(side: PanelSide) {
     }
 
     SettingsSectionCard(
-        title = "Barra viva, gestos y tirador",
-        subtitle = "Aspecto del borde, animaciones en vivo y acciones personalizadas por gesto",
+        title = "Tirador y área táctil del borde",
+        subtitle = "Aspecto del indicador, color, tamaño y separación del gesto Atrás",
         icon = Icons.Filled.TouchApp,
         badgeText = "${width.roundToInt()}×${height.roundToInt()} dp",
         badgeActive = true
@@ -1716,58 +1973,9 @@ private fun ActivationZoneCard(side: PanelSide) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
             Spacer(Modifier.height(12.dp))
 
-            // 2. Barra viva y avisos en tiempo real
+            // 2. Dimensiones del Área Táctil
             Text(
-                text = "2 · BARRA VIVA Y ANIMACIONES DE AVISO",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
-                letterSpacing = 0.8.sp
-            )
-            Text(
-                text = "La barra se ilumina 4 segundos con onda luminosa; tócala durante el aviso para actuar al instante.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp)
-            )
-        }
-
-        SwitchRow(
-            title = "Animar al copiar texto",
-            subtitle = "Muestra pulso e icono de portapapeles; tocar abre acciones rápidas",
-            checked = pulseCopy,
-            onCheckedChange = {
-                pulseCopy = it
-                Prefs.setEdgePulseOnCopy(context, it)
-            }
-        )
-        SwitchRow(
-            title = "Animar con capturas de pantalla",
-            subtitle = "Se ilumina al tomar una captura para verla, compartirla o borrarla",
-            checked = pulseScreenshot,
-            onCheckedChange = {
-                pulseScreenshot = it
-                Prefs.setEdgePulseOnScreenshot(context, it)
-            }
-        )
-        SwitchRow(
-            title = "Animar con notificaciones",
-            subtitle = "Muestra el icono de la app que notifica y abre el aviso al tocar",
-            checked = pulseNotification,
-            onCheckedChange = {
-                pulseNotification = it
-                Prefs.setEdgePulseOnNotification(context, it)
-            }
-        )
-
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-            Spacer(Modifier.height(6.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
-            Spacer(Modifier.height(12.dp))
-
-            // 3. Dimensiones del Área Táctil
-            Text(
-                text = "3 · ZONA TÁCTIL (ÁREA DE ACCIÓN)",
+                text = "2 · ZONA TÁCTIL (ÁREA DE ACCIÓN)",
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary,
@@ -1830,9 +2038,9 @@ private fun ActivationZoneCard(side: PanelSide) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
             Spacer(Modifier.height(12.dp))
 
-            // 4. Dimensiones del Indicador Visible
+            // 3. Dimensiones del Indicador Visible
             Text(
-                text = "4 · TAMAÑO DEL INDICADOR VISIBLE",
+                text = "3 · TAMAÑO DEL INDICADOR VISIBLE",
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary,
@@ -1864,13 +2072,6 @@ private fun ActivationZoneCard(side: PanelSide) {
                 onValueChange = { indicatorHeight = it },
                 onValueChangeFinished = saveZone
             )
-
-            Spacer(Modifier.height(12.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
-            Spacer(Modifier.height(12.dp))
-
-            // 5. Gestos personalizables del tirador
-            GestureCustomizationSection()
             Spacer(Modifier.height(8.dp))
         }
     }
@@ -2334,7 +2535,7 @@ private fun GestureCustomizationSection() {
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Text(
-            text = "5 · GESTOS PERSONALIZABLES",
+            text = "ACCIÓN POR GESTO",
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.primary,
