@@ -134,6 +134,13 @@ object Prefs {
         prefs(context).edit().putInt("saved_stream_vol_$stream", volume).apply()
     }
 
+    fun silentUntilMillis(context: Context): Long =
+        prefs(context).getLong("silent_until_millis", 0L).coerceAtLeast(0L)
+
+    fun setSilentUntilMillis(context: Context, untilMillis: Long) {
+        prefs(context).edit().putLong("silent_until_millis", untilMillis.coerceAtLeast(0L)).apply()
+    }
+
     fun panelIconScale(context: Context): Float =
         prefs(context).getFloat("panel_icon_scale", 1f).coerceIn(0.75f, 1.35f)
 

@@ -1,6 +1,5 @@
 package com.stree.nexo.ui
 
-import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
@@ -8,21 +7,31 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Brightness6
-import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -31,15 +40,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.stree.nexo.R
 import com.stree.nexo.data.Haptics
 import com.stree.nexo.data.Prefs
+import com.stree.nexo.panel.SoundControl
 import com.stree.nexo.ui.theme.visualSpec
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -131,6 +146,30 @@ internal fun ControlPanelPage(mode: String) {
 
         else -> {
             val audio = remember(context) { context.getSystemService(AudioManager::class.java) }
+            var showTimerPicker by remember { mutableStateOf(false) }
+            var customMinutes by remember { mutableIntStateOf(45) }
+            var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+            val silentUntil = remember(revision, nowMillis) { Prefs.silentUntilMillis(context) }
+            LaunchedEffect(silentUntil) {
+                if (silentUntil <= 0L) return@LaunchedEffect
+                while (true) {
+                    val now = System.currentTimeMillis()
+                    nowMillis = now
+                    if (now >= silentUntil) {
+                        SoundControl.restoreIfExpired(context)
+                        revision++
+                        break
+                    }
+                    delay(15_000L)
+                }
+            }
+
+            val remainingMinutes = if (silentUntil > nowMillis) {
+                ((silentUntil - nowMillis + 59_999L) / 60_000L).toInt().coerceAtLeast(1)
+            } else 0
+            val timerActive = remainingMinutes > 0
+
             val ringerMode = remember(revision) { audio.ringerMode }
             val ringVol = remember(revision) { audio.getStreamVolume(AudioManager.STREAM_RING) }
             val notifVol = remember(revision) { audio.getStreamVolume(AudioManager.STREAM_NOTIFICATION) }
@@ -139,94 +178,278 @@ internal fun ControlPanelPage(mode: String) {
             val isVibrate = ringerMode == AudioManager.RINGER_MODE_VIBRATE
             val isNormal = ringerMode == AudioManager.RINGER_MODE_NORMAL && !isSilent
 
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                // Solo iconos para silencio, vibración y sonido normal
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    ControlIconTile(
-                        icon = Icons.AutoMirrored.Filled.VolumeOff,
-                        contentDescription = "Silencio",
-                        active = isSilent,
-                        iconBrush = iconBrush,
-                        activeBg = themeSpec.primary.copy(alpha = 0.22f),
-                        activeBorder = themeSpec.primary.copy(alpha = 0.65f),
-                        idleBg = themeSpec.surfaceVariant.copy(alpha = 0.42f),
-                        idleBorder = themeSpec.outlineVariant.copy(alpha = 0.28f),
-                        modifier = Modifier.weight(1f).height(62.dp)
+            val activeBg = themeSpec.primary.copy(alpha = 0.22f)
+            val activeBorder = themeSpec.primary.copy(alpha = 0.68f)
+            val idleBg = themeSpec.surfaceVariant.copy(alpha = 0.42f)
+            val idleBorder = themeSpec.outlineVariant.copy(alpha = 0.30f)
+
+            fun applyTimedSilence(minutes: Int) {
+                Haptics.perform(context)
+                scope.launch {
+                    SoundControl.scheduleTimedSilence(context, minutes)
+                    nowMillis = System.currentTimeMillis()
+                    showTimerPicker = false
+                    revision++
+                    context.controlMessage("En silencio por ${formatDuration(minutes)}")
+                }
+            }
+
+            AnimatedContent(
+                targetState = showTimerPicker,
+                transitionSpec = {
+                    fadeIn(tween(150, easing = PanelMotion.StandardEasing)) togetherWith
+                        fadeOut(tween(120, easing = PanelMotion.StandardEasing))
+                },
+                label = "soundOrTimer"
+            ) { pickingTimer ->
+                if (!pickingTimer) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Haptics.perform(context)
-                        scope.launch {
-                            silenceWithoutRestrictingNotifications(context, audio)
-                            revision++
+                        // Fila 1: Silencio, Vibrar y Sonido normal (solo iconos)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            ControlIconTile(
+                                icon = Icons.AutoMirrored.Filled.VolumeOff,
+                                contentDescription = "Silencio",
+                                active = isSilent && !timerActive,
+                                iconBrush = iconBrush,
+                                activeBg = activeBg,
+                                activeBorder = activeBorder,
+                                idleBg = idleBg,
+                                idleBorder = idleBorder,
+                                onLongClick = {
+                                    Haptics.perform(context, strong = true)
+                                    showTimerPicker = true
+                                },
+                                modifier = Modifier.weight(1f).height(64.dp)
+                            ) {
+                                Haptics.perform(context)
+                                scope.launch {
+                                    SoundControl.cancelTimedSilence(context)
+                                    SoundControl.silenceWithoutRestrictingNotifications(context)
+                                    revision++
+                                }
+                            }
+
+                            ControlIconTile(
+                                icon = Icons.Filled.Vibration,
+                                contentDescription = "Vibrar",
+                                active = isVibrate,
+                                iconBrush = iconBrush,
+                                activeBg = activeBg,
+                                activeBorder = activeBorder,
+                                idleBg = idleBg,
+                                idleBorder = idleBorder,
+                                modifier = Modifier.weight(1f).height(64.dp)
+                            ) {
+                                Haptics.perform(context)
+                                if (!SoundControl.enableVibrate(context)) {
+                                    context.controlMessage("No se pudo activar la vibración")
+                                }
+                                revision++
+                            }
+
+                            ControlIconTile(
+                                icon = Icons.AutoMirrored.Filled.VolumeUp,
+                                contentDescription = "Sonido normal",
+                                active = isNormal,
+                                iconBrush = iconBrush,
+                                activeBg = activeBg,
+                                activeBorder = activeBorder,
+                                idleBg = idleBg,
+                                idleBorder = idleBorder,
+                                modifier = Modifier.weight(1f).height(64.dp)
+                            ) {
+                                Haptics.perform(context)
+                                if (!SoundControl.restoreNormalSound(context)) {
+                                    context.controlMessage("El dispositivo no permitió restaurar el sonido")
+                                }
+                                revision++
+                            }
+                        }
+
+                        // Fila 2: Silencio con temporizador y Asistente de voz (solo iconos)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            ControlIconTile(
+                                icon = Icons.Filled.Timer,
+                                contentDescription = "Silenciar por tiempo",
+                                active = timerActive,
+                                badge = if (timerActive) formatCompactDuration(remainingMinutes) else null,
+                                iconBrush = iconBrush,
+                                activeBg = activeBg,
+                                activeBorder = activeBorder,
+                                idleBg = idleBg,
+                                idleBorder = idleBorder,
+                                modifier = Modifier.weight(1f).height(64.dp)
+                            ) {
+                                Haptics.perform(context)
+                                showTimerPicker = true
+                            }
+
+                            ControlPainterTile(
+                                painter = painterResource(R.drawable.ic_voice_assistant),
+                                contentDescription = "Asistente de voz",
+                                iconBrush = iconBrush,
+                                bg = idleBg,
+                                border = themeSpec.outlineVariant.copy(alpha = 0.36f),
+                                modifier = Modifier.weight(1f).height(64.dp)
+                            ) {
+                                Haptics.perform(context)
+                                val voice = Intent(Intent.ACTION_VIEW, Uri.parse("https://chatgpt.com/voice"))
+                                    .setPackage("com.openai.chatgpt")
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                val opened = runCatching { context.startActivity(voice); true }.getOrDefault(false)
+                                if (!opened) {
+                                    val app = context.packageManager.getLaunchIntentForPackage("com.openai.chatgpt")
+                                        ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    if (app == null || runCatching { context.startActivity(app) }.isFailure) {
+                                        context.controlMessage("Instala ChatGPT para usar el asistente")
+                                    }
+                                }
+                            }
                         }
                     }
-
-                    ControlIconTile(
-                        icon = Icons.Filled.Vibration,
-                        contentDescription = "Vibrar",
-                        active = isVibrate,
-                        iconBrush = iconBrush,
-                        activeBg = themeSpec.primary.copy(alpha = 0.22f),
-                        activeBorder = themeSpec.primary.copy(alpha = 0.65f),
-                        idleBg = themeSpec.surfaceVariant.copy(alpha = 0.42f),
-                        idleBorder = themeSpec.outlineVariant.copy(alpha = 0.28f),
-                        modifier = Modifier.weight(1f).height(62.dp)
+                } else {
+                    // Selector rápido de duración: 15 min, 30 min, 1 hora o personalizado
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically)
                     ) {
-                        Haptics.perform(context)
-                        saveActiveVolumes(context, audio)
-                        runCatching { audio.ringerMode = AudioManager.RINGER_MODE_VIBRATE }
-                            .onFailure { context.controlMessage("No se pudo activar la vibración") }
-                        revision++
-                    }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Timer,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp).gradientTint(iconBrush),
+                                tint = Color.White
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "¿Por cuánto?",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (timerActive) {
+                                TextButton(
+                                    onClick = {
+                                        Haptics.perform(context)
+                                        SoundControl.restoreNormalSound(context)
+                                        showTimerPicker = false
+                                        revision++
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                                    modifier = Modifier.height(28.dp)
+                                ) {
+                                    Text("Normal", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                            IconButton(
+                                onClick = { showTimerPicker = false },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Close,
+                                    contentDescription = "Cerrar",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
 
-                    ControlIconTile(
-                        icon = Icons.AutoMirrored.Filled.VolumeUp,
-                        contentDescription = "Sonido normal",
-                        active = isNormal,
-                        iconBrush = iconBrush,
-                        activeBg = themeSpec.primary.copy(alpha = 0.22f),
-                        activeBorder = themeSpec.primary.copy(alpha = 0.65f),
-                        idleBg = themeSpec.surfaceVariant.copy(alpha = 0.42f),
-                        idleBorder = themeSpec.outlineVariant.copy(alpha = 0.28f),
-                        modifier = Modifier.weight(1f).height(62.dp)
-                    ) {
-                        Haptics.perform(context)
-                        restoreNormalSound(context, audio)
-                        revision++
-                    }
-                }
+                        // Opciones rápidas: 15 min, 30 min, 1 hora
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(15 to "15 m", 30 to "30 m", 60 to "1 h").forEach { (mins, label) ->
+                                Surface(
+                                    onClick = { applyTimedSilence(mins) },
+                                    modifier = Modifier.weight(1f).height(42.dp),
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = idleBg,
+                                    border = BorderStroke(0.9.dp, activeBorder.copy(alpha = 0.45f))
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = themeSpec.onSurface
+                                        )
+                                    }
+                                }
+                            }
+                        }
 
-                // Icono del asistente de voz (ChatGPT Voz / Live), sin texto
-                ControlIconTile(
-                    icon = Icons.Filled.GraphicEq,
-                    contentDescription = "Asistente de voz",
-                    active = false,
-                    iconBrush = iconBrush,
-                    activeBg = themeSpec.primary.copy(alpha = 0.22f),
-                    activeBorder = themeSpec.primary.copy(alpha = 0.65f),
-                    idleBg = themeSpec.surfaceVariant.copy(alpha = 0.42f),
-                    idleBorder = themeSpec.outlineVariant.copy(alpha = 0.34f),
-                    iconSizeDp = 28,
-                    modifier = Modifier.fillMaxWidth().height(60.dp)
-                ) {
-                    Haptics.perform(context)
-                    val voice = Intent(Intent.ACTION_VIEW, Uri.parse("https://chatgpt.com/voice"))
-                        .setPackage("com.openai.chatgpt")
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    val opened = runCatching { context.startActivity(voice); true }.getOrDefault(false)
-                    if (!opened) {
-                        val app = context.packageManager.getLaunchIntentForPackage("com.openai.chatgpt")
-                            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        if (app == null || runCatching { context.startActivity(app) }.isFailure) {
-                            context.controlMessage("Instala ChatGPT para usar el asistente")
+                        // Duración personalizada con botones - / + y confirmar
+                        Surface(
+                            modifier = Modifier.fillMaxWidth().height(46.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            color = idleBg,
+                            border = BorderStroke(0.8.dp, idleBorder)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                IconButton(
+                                    onClick = {
+                                        Haptics.perform(context)
+                                        val step = if (customMinutes > 60) 15 else 5
+                                        customMinutes = (customMinutes - step).coerceAtLeast(5)
+                                    },
+                                    modifier = Modifier.size(34.dp)
+                                ) {
+                                    Icon(Icons.Filled.Remove, "Menos tiempo", Modifier.size(18.dp))
+                                }
+                                Text(
+                                    text = formatDuration(customMinutes),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = themeSpec.onSurface
+                                )
+                                IconButton(
+                                    onClick = {
+                                        Haptics.perform(context)
+                                        val step = if (customMinutes >= 60) 15 else 5
+                                        customMinutes = (customMinutes + step).coerceAtMost(480)
+                                    },
+                                    modifier = Modifier.size(34.dp)
+                                ) {
+                                    Icon(Icons.Filled.Add, "Más tiempo", Modifier.size(18.dp))
+                                }
+                                Surface(
+                                    onClick = { applyTimedSilence(customMinutes) },
+                                    modifier = Modifier.size(34.dp),
+                                    shape = CircleShape,
+                                    color = activeBg,
+                                    border = BorderStroke(1.dp, activeBorder)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Check,
+                                            contentDescription = "Activar silencio",
+                                            modifier = Modifier.size(18.dp).gradientTint(iconBrush),
+                                            tint = Color.White
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -235,6 +458,7 @@ internal fun ControlPanelPage(mode: String) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ControlIconTile(
     icon: ImageVector,
@@ -246,22 +470,73 @@ private fun ControlIconTile(
     idleBg: Color,
     idleBorder: Color,
     modifier: Modifier = Modifier,
+    badge: String? = null,
     iconSizeDp: Int = 24,
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     val shape = RoundedCornerShape(18.dp)
     Surface(
         modifier = modifier
             .clip(shape)
-            .clickable(role = Role.Button, onClick = onClick),
+            .combinedClickable(
+                role = Role.Button,
+                onClick = onClick,
+                onLongClick = onLongClick
+            ),
         shape = shape,
         color = if (active) activeBg else idleBg,
         border = BorderStroke(if (active) 1.3.dp else 0.8.dp, if (active) activeBorder else idleBorder),
         tonalElevation = 0.dp
     ) {
-        Box(contentAlignment = Alignment.Center) {
+        Row(
+            modifier = Modifier.fillMaxSize(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
             Icon(
                 imageVector = icon,
+                contentDescription = contentDescription,
+                modifier = Modifier.size(iconSizeDp.dp).gradientTint(iconBrush),
+                tint = Color.White
+            )
+            if (badge != null) {
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    text = badge,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ControlPainterTile(
+    painter: Painter,
+    contentDescription: String,
+    iconBrush: Brush,
+    bg: Color,
+    border: Color,
+    modifier: Modifier = Modifier,
+    iconSizeDp: Int = 27,
+    onClick: () -> Unit
+) {
+    val shape = RoundedCornerShape(18.dp)
+    Surface(
+        onClick = onClick,
+        modifier = modifier,
+        shape = shape,
+        color = bg,
+        border = BorderStroke(0.9.dp, border),
+        tonalElevation = 0.dp
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                painter = painter,
                 contentDescription = contentDescription,
                 modifier = Modifier.size(iconSizeDp.dp).gradientTint(iconBrush),
                 tint = Color.White
@@ -270,90 +545,16 @@ private fun ControlIconTile(
     }
 }
 
-/**
- * Silencia el tono y las notificaciones del celular sin activar No molestar
- * ni restringir la llegada de notificaciones.
- */
-private suspend fun silenceWithoutRestrictingNotifications(context: Context, audio: AudioManager) {
-    saveActiveVolumes(context, audio)
-    val nm = context.getSystemService(NotificationManager::class.java)
-    val dndWasOff = nm.currentInterruptionFilter == NotificationManager.INTERRUPTION_FILTER_ALL
-
-    fun muteStreamsOnly() {
-        runCatching { audio.ringerMode = AudioManager.RINGER_MODE_VIBRATE }
-        listOf(AudioManager.STREAM_NOTIFICATION, AudioManager.STREAM_SYSTEM).forEach { stream ->
-            runCatching { audio.setStreamVolume(stream, 0, 0) }
-        }
-    }
-
-    if (context.soundPolicyAllowed()) {
-        val applied = runCatching {
-            audio.ringerMode = AudioManager.RINGER_MODE_SILENT
-            true
-        }.getOrDefault(false)
-
-        if (!applied) {
-            muteStreamsOnly()
-            return
-        }
-
-        // Algunos sistemas activan No molestar automáticamente al pasar a
-        // RINGER_MODE_SILENT. Si eso ocurre, lo revertimos de inmediato para no
-        // restringir notificaciones y silenciamos solo los canales de sonido.
-        if (dndWasOff) {
-            if (nm.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL) {
-                runCatching { nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL) }
-                muteStreamsOnly()
-                return
-            }
-            delay(150)
-            if (nm.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL) {
-                runCatching { nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL) }
-                muteStreamsOnly()
-            }
-        }
-    } else {
-        // Sin permiso de No molestar silenciamos directo sin tocar restricciones
-        // de notificaciones ni pedir cambiar la política de No molestar.
-        muteStreamsOnly()
-    }
+private fun formatDuration(minutes: Int): String = when {
+    minutes < 60 -> "$minutes min"
+    minutes % 60 == 0 -> if (minutes == 60) "1 hora" else "${minutes / 60} h"
+    else -> "${minutes / 60} h ${minutes % 60} min"
 }
 
-private fun saveActiveVolumes(context: Context, audio: AudioManager) {
-    if (audio.ringerMode != AudioManager.RINGER_MODE_NORMAL) return
-    listOf(
-        AudioManager.STREAM_RING,
-        AudioManager.STREAM_NOTIFICATION,
-        AudioManager.STREAM_SYSTEM
-    ).forEach { stream ->
-        val current = runCatching { audio.getStreamVolume(stream) }.getOrDefault(0)
-        if (current > 0) Prefs.setSavedStreamVolume(context, stream, current)
-    }
-}
-
-private fun restoreNormalSound(context: Context, audio: AudioManager) {
-    runCatching {
-        audio.ringerMode = AudioManager.RINGER_MODE_NORMAL
-    }.onFailure {
-        // Si Android bloquea salir de silencio estricto sin permiso, avisamos.
-        context.controlMessage("El dispositivo no permitió restaurar el sonido")
-        return
-    }
-    listOf(
-        AudioManager.STREAM_RING,
-        AudioManager.STREAM_NOTIFICATION,
-        AudioManager.STREAM_SYSTEM
-    ).forEach { stream ->
-        runCatching {
-            val max = audio.getStreamMaxVolume(stream).coerceAtLeast(1)
-            val current = audio.getStreamVolume(stream)
-            if (current == 0) {
-                val saved = Prefs.savedStreamVolume(context, stream)
-                val target = if (saved > 0) saved.coerceAtMost(max) else (max / 2).coerceAtLeast(1)
-                audio.setStreamVolume(stream, target, 0)
-            }
-        }
-    }
+private fun formatCompactDuration(minutes: Int): String = when {
+    minutes < 60 -> "${minutes}m"
+    minutes % 60 == 0 -> "${minutes / 60}h"
+    else -> "${minutes / 60}h${minutes % 60}"
 }
 
 @Composable
@@ -468,9 +669,6 @@ private fun VolumeSlider(
         }
     }
 }
-
-private fun Context.soundPolicyAllowed() =
-    getSystemService(NotificationManager::class.java).isNotificationPolicyAccessGranted
 
 private fun Context.controlMessage(message: String) =
     Toast.makeText(this, message, Toast.LENGTH_SHORT).show()

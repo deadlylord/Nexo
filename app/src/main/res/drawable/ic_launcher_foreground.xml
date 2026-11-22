@@ -1,28 +1,63 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <group
-        android:pivotX="54"
-        android:pivotY="54"
-        android:scaleX="0.72"
-        android:scaleY="0.72">
-        <path
-            android:pathData="M54,32 a22,22 0 1,0 0,44 a22,22 0 1,0 0,-44"
-            android:strokeWidth="7"
-            android:strokeColor="#FFFFFFFF"
-            android:fillColor="@android:color/transparent"
-            android:strokeLineCap="round" />
-        <path
-            android:pathData="M70,70 L84,84"
-            android:strokeWidth="9"
-            android:strokeColor="#FFFFFFFF"
-            android:fillColor="@android:color/transparent"
-            android:strokeLineCap="round" />
-        <path
-            android:pathData="M54,64 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0"
-            android:fillColor="#FF7C3AED" />
-    </group>
+    <!-- Tarjeta sutil translúcida estilo panel lateral -->
+    <path
+        android:pathData="M34,26h40c4.42,0 8,3.58 8,8v40c0,4.42 -3.58,8 -8,8h-40c-4.42,0 -8,-3.58 -8,-8v-40c0,-4.42 3.58,-8 8,-8z"
+        android:fillColor="#18FFFFFF"
+        android:strokeWidth="1.4">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="26"
+                android:startY="26"
+                android:endX="82"
+                android:endY="82"
+                android:type="linear">
+                <item android:color="#99A5B4FC" android:offset="0.0" />
+                <item android:color="#40FFFFFF" android:offset="0.5" />
+                <item android:color="#995EEAD4" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Monograma N moderno con degradado iridiscente -->
+    <path
+        android:pathData="M39.5,69.5V38.5L68.5,69.5V38.5"
+        android:fillColor="@android:color/transparent"
+        android:strokeWidth="7.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="36"
+                android:startY="36"
+                android:endX="72"
+                android:endY="72"
+                android:type="linear">
+                <item android:color="#FF7DD3FC" android:offset="0.0" />
+                <item android:color="#FFA78BFA" android:offset="0.52" />
+                <item android:color="#FFF472B6" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Píldora luminosa de borde lateral (firma visual de Nexo) -->
+    <path
+        android:pathData="M76.5,43.5a2.1,2.1 0,0 1,2.1 2.1v16.8a2.1,2.1 0,0 1,-4.2 0v-16.8a2.1,2.1 0,0 1,2.1 -2.1z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="76.5"
+                android:startY="43"
+                android:endX="76.5"
+                android:endY="65"
+                android:type="linear">
+                <item android:color="#FF5EEAD4" android:offset="0.0" />
+                <item android:color="#FF818CF8" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
 </vector>

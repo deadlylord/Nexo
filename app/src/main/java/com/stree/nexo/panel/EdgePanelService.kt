@@ -407,6 +407,12 @@ class EdgePanelService : Service() {
             }
         }
 
+        fun syncSilentTimer(context: Context) {
+            instance?.let { service ->
+                service.gestureHandler.post { service.rescheduleSilentTimer() }
+            }
+        }
+
         fun stop(context: Context) {
             context.stopService(Intent(context, EdgePanelService::class.java))
         }

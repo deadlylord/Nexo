@@ -133,15 +133,29 @@ class ActivatorControlsActivity : ComponentActivity() {
                         ) {
                             BoxWithConstraints(
                                 modifier = Modifier.fillMaxSize(),
-                                // Posicionado abajo, en la zona del teclado, para alcanzarlo con una mano.
-                                contentAlignment = if (side == PanelSide.END) Alignment.BottomEnd else Alignment.BottomStart
+                                // A la altura exacta del disparador lateral para alcanzarlo directo con el dedo.
+                                contentAlignment = if (side == PanelSide.END) Alignment.TopEnd else Alignment.TopStart
                             ) {
-                                val navBarBottom = with(LocalDensity.current) {
-                                    WindowInsets.navigationBars.getBottom(this).toDp()
-                                }
+                                val density = LocalDensity.current
+                                val statusBarTop = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
+                                val navBarBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
+                                val topSafeMargin = maxOf(statusBarTop, 24.dp) + 8.dp
+                                val bottomSafeMargin = navBarBottom + 16.dp
+
                                 // Tamaño compacto propio, independiente del panel principal.
-                                val panelWidth = minOf(maxWidth * 0.62f, 260.dp)
-                                val panelHeight = minOf(maxHeight * 0.34f, 276.dp).coerceAtLeast(232.dp)
+                                val panelWidth = minOf(maxWidth * 0.64f, 268.dp)
+                                val panelHeight = minOf(maxHeight * 0.35f, 286.dp).coerceAtLeast(242.dp)
+
+                                val handleHeight = Prefs.activationHeight(this@ActivatorControlsActivity).dp
+                                    .coerceAtMost((maxHeight - 56.dp).coerceAtLeast(48.dp))
+                                val maxHandleOffset = ((maxHeight / 2f) - (handleHeight / 2f) - 28.dp).coerceAtLeast(0.dp)
+                                val triggerCenterY = (maxHeight / 2f) +
+                                    maxHandleOffset * Prefs.panelYFraction(this@ActivatorControlsActivity)
+                                val maxTopMargin = (maxHeight - bottomSafeMargin - panelHeight - 8.dp)
+                                    .coerceAtLeast(topSafeMargin)
+                                val panelTopMargin = (triggerCenterY - (panelHeight + 8.dp) / 2f)
+                                    .coerceIn(topSafeMargin, maxTopMargin)
+
                                 val activeRealPage = realIndex(pager.currentPage)
                                 val tabItems = remember {
                                     listOf(
@@ -156,7 +170,7 @@ class ActivatorControlsActivity : ComponentActivity() {
                                     state = pager,
                                     pageSpacing = 0.dp,
                                     modifier = Modifier
-                                        .padding(bottom = navBarBottom + 24.dp)
+                                        .padding(top = panelTopMargin)
                                         .width(panelWidth)
                                         .height(panelHeight + 8.dp)
                                 ) { page ->

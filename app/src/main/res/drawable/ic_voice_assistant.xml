@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Ondas de voz redondeadas -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4.5,10.5a1.25,1.25 0 0,1 1.25,1.25v2.5a1.25,1.25 0 0,1 -2.5,0v-2.5A1.25,1.25 0 0,1 4.5,10.5z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M8.5,7.2a1.35,1.35 0 0,1 1.35,1.35v8.9a1.35,1.35 0 0,1 -2.7,0v-8.9A1.35,1.35 0 0,1 8.5,7.2z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12.5,9.5a1.35,1.35 0 0,1 1.35,1.35v4.3a1.35,1.35 0 0,1 -2.7,0v-4.3A1.35,1.35 0 0,1 12.5,9.5z" />
+    <!-- Destello IA superior derecho -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M18.2,3.5L19.1,6.4L22,7.3L19.1,8.2L18.2,11.1L17.3,8.2L14.4,7.3L17.3,6.4Z" />
+    <!-- Punto de acento inferior derecho -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M17.2,14.5a1.25,1.25 0 0,1 1.25,1.25v1.4a1.25,1.25 0 0,1 -2.5,0v-1.4A1.25,1.25 0 0,1 17.2,14.5z" />
+</vector>
