@@ -18,7 +18,12 @@ data class NowPlaying(
     val playing: Boolean,
     val actions: Long,
     val controller: MediaController,
-    val packageName: String = controller.packageName.orEmpty()
+    val packageName: String = controller.packageName.orEmpty(),
+    val albumArt: android.graphics.Bitmap? = null,
+    val durationMs: Long = 0L,
+    val positionMs: Long = 0L,
+    val positionUpdateTimeMs: Long = 0L,
+    val playbackSpeed: Float = 1f
 )
 
 enum class OpenMusicResult {
@@ -27,7 +32,7 @@ enum class OpenMusicResult {
     NO_ACTIVE_APP
 }
 
-/** Uses media-session metadata only; notification bodies are not read or stored. */
+/** Uses media-session metadata and ephemeral live notification headers for Dynamic Island. */
 class MediaControlService : NotificationListenerService() {
     companion object {
         private val mutablePlayback = MutableStateFlow<NowPlaying?>(null)
@@ -115,14 +120,30 @@ class MediaControlService : NotificationListenerService() {
         val selected = selectController(controllers)
         mutablePlayback.value = selected?.let { controller ->
             val metadata = controller.metadata
+            val pb = controller.playbackState
+            val rawArt = metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
+                ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
+                ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
+            val scaledArt = rawArt?.let { bmp ->
+                runCatching {
+                    if (bmp.width > 128 || bmp.height > 128) {
+                        android.graphics.Bitmap.createScaledBitmap(bmp, 120, 120, true)
+                    } else bmp
+                }.getOrNull()
+            }
             NowPlaying(
                 title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)
                     ?: metadata?.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE) ?: "Reproducción multimedia",
                 artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
-                playing = controller.playbackState?.state == PlaybackState.STATE_PLAYING,
-                actions = controller.playbackState?.actions ?: 0L,
+                playing = pb?.state == PlaybackState.STATE_PLAYING,
+                actions = pb?.actions ?: 0L,
                 controller = controller,
-                packageName = controller.packageName.orEmpty()
+                packageName = controller.packageName.orEmpty(),
+                albumArt = scaledArt,
+                durationMs = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION)?.coerceAtLeast(0L) ?: 0L,
+                positionMs = pb?.position?.coerceAtLeast(0L) ?: 0L,
+                positionUpdateTimeMs = pb?.lastPositionUpdateTime ?: android.os.SystemClock.elapsedRealtime(),
+                playbackSpeed = pb?.playbackSpeed ?: 1f
             )
         }
     }
@@ -142,13 +163,33 @@ class MediaControlService : NotificationListenerService() {
 
         val notif = sbn.notification ?: return
         val flags = notif.flags
-        val title = notif.extras?.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString().orEmpty().lowercase()
+        val extras = notif.extras
+        val rawTitle = extras?.getCharSequence(android.app.Notification.EXTRA_TITLE)
+            ?.toString()?.trim().orEmpty().take(48)
+        val rawText = extras?.getCharSequence(android.app.Notification.EXTRA_TEXT)
+            ?.toString()?.trim().orEmpty().take(110)
+        val titleLower = rawTitle.lowercase()
         val channel = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             notif.channelId.orEmpty().lowercase()
         } else ""
 
+        // Detectar llamadas entrantes o en curso (teléfono, WhatsApp, etc.)
+        if (notif.category == android.app.Notification.CATEGORY_CALL) {
+            val callPulse = com.stree.nexo.data.ClipboardHistoryStore.recordCall(
+                context = applicationContext,
+                key = sbn.key.orEmpty(),
+                packageName = pkg,
+                callerName = rawTitle.ifBlank { "Llamada en curso" },
+                statusText = rawText.ifBlank { "En llamada" },
+                contentIntent = notif.contentIntent,
+                startedAtMs = if (notif.`when` > 0L) notif.`when` else System.currentTimeMillis()
+            )
+            com.stree.nexo.panel.EdgePanelService.notifyCallUpdate(applicationContext, callPulse)
+            return
+        }
+
         // Detectar capturas de pantalla del sistema (Samsung, AOSP, MIUI, etc.)
-        if ("screenshot" in pkg.lowercase() || "screenshot" in channel || "captura" in title || "screenshot" in title) {
+        if ("screenshot" in pkg.lowercase() || "screenshot" in channel || "captura" in titleLower || "screenshot" in titleLower) {
             com.stree.nexo.panel.EdgePanelService.notifyScreenshotDetected(applicationContext)
             return
         }
@@ -159,17 +200,41 @@ class MediaControlService : NotificationListenerService() {
             (flags and android.app.Notification.FLAG_GROUP_SUMMARY) != 0
         if (isOngoing || pkg == "android" || pkg == "com.android.systemui") return
 
+        // Acciones directas ejecutables (ej. Marcar como leído, Archivar, Silenciar)
+        val quickActions = notif.actions
+            ?.mapNotNull { action ->
+                val actionIntent = action.actionIntent ?: return@mapNotNull null
+                val label = action.title?.toString()?.trim()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                if (!action.remoteInputs.isNullOrEmpty()) return@mapNotNull null
+                com.stree.nexo.data.NotificationQuickAction(
+                    title = label.take(18),
+                    intent = actionIntent
+                )
+            }
+            ?.take(2)
+            .orEmpty()
+
         val accent = notif.color.takeIf { it != 0 }
-        val rawTitle = notif.extras?.getCharSequence(android.app.Notification.EXTRA_TITLE)
-            ?.toString()?.trim().orEmpty().take(48)
         val pulse = com.stree.nexo.data.ClipboardHistoryStore.recordNotification(
             context = applicationContext,
+            key = sbn.key.orEmpty(),
             packageName = pkg,
             title = rawTitle,
+            textPreview = rawText,
             accentColor = accent,
-            contentIntent = notif.contentIntent
+            contentIntent = notif.contentIntent,
+            actions = quickActions
         )
         com.stree.nexo.panel.EdgePanelService.notifyNotificationPulse(applicationContext, pulse)
+    }
+
+    override fun onNotificationRemoved(sbn: android.service.notification.StatusBarNotification?) {
+        super.onNotificationRemoved(sbn)
+        val key = sbn?.key ?: return
+        if (com.stree.nexo.data.ClipboardHistoryStore.activeCall?.key == key) {
+            com.stree.nexo.data.ClipboardHistoryStore.clearCall(key)
+            com.stree.nexo.panel.EdgePanelService.notifyCallUpdate(applicationContext, null)
+        }
     }
 
     override fun onListenerDisconnected() {

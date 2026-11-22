@@ -1250,42 +1250,37 @@ private fun DynamicIslandCard() {
     var idlePill by remember { mutableStateOf(Prefs.dynamicIslandIdlePill(context)) }
     var media by remember { mutableStateOf(Prefs.dynamicIslandMedia(context)) }
     var notifications by remember { mutableStateOf(Prefs.dynamicIslandNotifications(context)) }
+    var hideLandscape by remember { mutableStateOf(Prefs.dynamicIslandHideLandscape(context)) }
     var topOffset by remember { mutableFloatStateOf(Prefs.dynamicIslandTopOffset(context).toFloat()) }
+    var xOffset by remember { mutableFloatStateOf(Prefs.dynamicIslandHorizontalOffset(context).toFloat()) }
+    var idleWidth by remember { mutableFloatStateOf(Prefs.dynamicIslandIdleWidth(context).toFloat()) }
+    var idleHeight by remember { mutableFloatStateOf(Prefs.dynamicIslandIdleHeight(context).toFloat()) }
 
     val themeSpec = remember(Prefs.themeRevision) {
         Prefs.panelStyle(context).visualSpec(light = false)
     }
 
     SettingsSectionCard(
-        title = "Isla Dinámica de Nexo",
-        subtitle = "Cápsula superior con tu tema para música, avisos y notificaciones en ventana flotante",
+        title = "Isla Dinámica OLED",
+        subtitle = "Negro puro fundido con la cámara · Hub rápido, música, llamadas, carga, Bluetooth y burbuja dividida",
         icon = Icons.Filled.Layers,
         badgeText = if (enabled) "Activa" else "Inactiva",
         badgeActive = enabled
     ) {
-        // Vista previa temática de la Isla Dinámica
-        Box(
+        // Vista previa OLED negra pura con burbuja dividida
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-            contentAlignment = Alignment.Center
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Surface(
                 shape = RoundedCornerShape(24.dp),
-                color = Color(0xFF0C0E14),
-                border = BorderStroke(
-                    width = 1.2.dp,
-                    brush = Brush.linearGradient(
-                        listOf(
-                            themeSpec.primary.copy(alpha = 0.8f),
-                            Color.White.copy(alpha = 0.35f),
-                            themeSpec.secondary.copy(alpha = 0.75f)
-                        )
-                    )
-                ),
+                color = Color.Black,
                 modifier = Modifier
-                    .fillMaxWidth(0.76f)
-                    .height(42.dp)
+                    .width(214.dp)
+                    .height(38.dp)
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 12.dp),
@@ -1296,7 +1291,7 @@ private fun DynamicIslandCard() {
                         modifier = Modifier
                             .size(22.dp)
                             .clip(CircleShape)
-                            .background(themeSpec.primary.copy(alpha = 0.28f)),
+                            .background(themeSpec.primary.copy(alpha = 0.25f)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
@@ -1308,7 +1303,7 @@ private fun DynamicIslandCard() {
                     }
                     Column(Modifier.weight(1f)) {
                         Text(
-                            text = "Isla Dinámica · Nexo",
+                            text = "Nexo OLED",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = Color.White,
@@ -1316,26 +1311,42 @@ private fun DynamicIslandCard() {
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "Toca notificaciones para ventana flotante",
+                            text = "Toca · Sostén · Desliza",
                             style = MaterialTheme.typography.labelSmall,
                             fontSize = 9.sp,
-                            color = Color(0xFFB8C0D4),
+                            color = Color(0xFFB4BCD0),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.width(2.5.dp).height(8.dp).clip(CircleShape).background(themeSpec.primary))
-                        Box(Modifier.width(2.5.dp).height(14.dp).clip(CircleShape).background(themeSpec.secondary))
-                        Box(Modifier.width(2.5.dp).height(10.dp).clip(CircleShape).background(themeSpec.primary))
+                        Box(Modifier.width(2.5.dp).height(7.dp).clip(CircleShape).background(themeSpec.primary))
+                        Box(Modifier.width(2.5.dp).height(13.dp).clip(CircleShape).background(themeSpec.secondary))
+                        Box(Modifier.width(2.5.dp).height(9.dp).clip(CircleShape).background(themeSpec.primary))
                     }
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            // Satélite de burbuja dividida
+            Surface(
+                shape = CircleShape,
+                color = Color.Black,
+                modifier = Modifier.size(38.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Filled.History,
+                        contentDescription = null,
+                        tint = Color(0xFFFBBF24),
+                        modifier = Modifier.size(16.dp)
+                    )
                 }
             }
         }
 
         SwitchRow(
-            title = "Activar Isla Dinámica superior",
-            subtitle = "Aparece arriba al reproducir música, copiar, capturar o recibir notificaciones",
+            title = "Activar Isla Dinámica OLED",
+            subtitle = "Muestra música, notificaciones, llamadas, carga, Bluetooth, cronómetro y Hub rápido",
             checked = enabled,
             onCheckedChange = {
                 enabled = it
@@ -1347,8 +1358,18 @@ private fun DynamicIslandCard() {
         if (enabled) {
             SectionDivider()
             SwitchRow(
-                title = "Notificaciones en ventana flotante",
-                subtitle = "Muestra la notificación arriba; al tocarla la abre en ventana flotante",
+                title = "Cápsula siempre visible sobre la cámara",
+                subtitle = "Toca la cápsula negra en reposo para abrir el Hub rápido (Spotlight, Linterna, Silencio, Captura, Cronómetro)",
+                checked = idlePill,
+                onCheckedChange = {
+                    idlePill = it
+                    Prefs.setDynamicIslandIdlePill(context, it)
+                    EdgePanelService.refresh(context)
+                }
+            )
+            SwitchRow(
+                title = "Notificaciones interactivas",
+                subtitle = "Toque corto abre en ventana flotante; mantener pulsado o bajar lee vista previa y acciones",
                 checked = notifications,
                 onCheckedChange = {
                     notifications = it
@@ -1357,8 +1378,8 @@ private fun DynamicIslandCard() {
                 }
             )
             SwitchRow(
-                title = "Reproductor en vivo en la isla",
-                subtitle = "Muestra la canción actual y se expande al tocar para controlar reproducción",
+                title = "Reproductor completo en la isla",
+                subtitle = "Carátula del álbum, barra de progreso en vivo, controles y burbuja dividida",
                 checked = media,
                 onCheckedChange = {
                     media = it
@@ -1367,25 +1388,90 @@ private fun DynamicIslandCard() {
                 }
             )
             SwitchRow(
-                title = "Cápsula siempre visible (acceso Spotlight)",
-                subtitle = "Mantiene una cápsula discreta en reposo; al tocarla abre la búsqueda estilo iPhone",
-                checked = idlePill,
+                title = "Ocultar automáticamente en horizontal",
+                subtitle = "Desaparece al ver videos o jugar en pantalla horizontal",
+                checked = hideLandscape,
                 onCheckedChange = {
-                    idlePill = it
-                    Prefs.setDynamicIslandIdlePill(context, it)
+                    hideLandscape = it
+                    Prefs.setDynamicIslandHideLandscape(context, it)
                     EdgePanelService.refresh(context)
                 }
             )
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "CALIBRACIÓN CON LA CÁMARA",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        letterSpacing = 0.8.sp
+                    )
+                    TextButton(
+                        onClick = {
+                            topOffset = 8f
+                            xOffset = 0f
+                            idleWidth = 96f
+                            idleHeight = 28f
+                            Prefs.setDynamicIslandTopOffset(context, 8)
+                            Prefs.setDynamicIslandHorizontalOffset(context, 0)
+                            Prefs.setDynamicIslandIdleWidth(context, 96)
+                            Prefs.setDynamicIslandIdleHeight(context, 28)
+                            EdgePanelService.refresh(context)
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                    ) {
+                        Text("Centrar", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
                 SteppedSlider(
-                    label = "Separación superior (alinear con cámara)",
+                    label = "Posición vertical (Y)",
                     valueText = "${topOffset.roundToInt()} dp",
                     value = topOffset,
                     valueRange = 0f..48f,
-                    stepAmount = 2f,
+                    stepAmount = 1f,
                     onValueChange = { topOffset = it },
                     onValueChangeFinished = {
                         Prefs.setDynamicIslandTopOffset(context, topOffset.roundToInt())
+                        EdgePanelService.refresh(context)
+                    }
+                )
+                SteppedSlider(
+                    label = "Posición horizontal (X)",
+                    valueText = "${xOffset.roundToInt()} dp",
+                    value = xOffset,
+                    valueRange = -64f..64f,
+                    stepAmount = 2f,
+                    onValueChange = { xOffset = it },
+                    onValueChangeFinished = {
+                        Prefs.setDynamicIslandHorizontalOffset(context, xOffset.roundToInt())
+                        EdgePanelService.refresh(context)
+                    }
+                )
+                SteppedSlider(
+                    label = "Ancho en reposo",
+                    valueText = "${idleWidth.roundToInt()} dp",
+                    value = idleWidth,
+                    valueRange = 64f..152f,
+                    stepAmount = 4f,
+                    onValueChange = { idleWidth = it },
+                    onValueChangeFinished = {
+                        Prefs.setDynamicIslandIdleWidth(context, idleWidth.roundToInt())
+                        EdgePanelService.refresh(context)
+                    }
+                )
+                SteppedSlider(
+                    label = "Alto en reposo",
+                    valueText = "${idleHeight.roundToInt()} dp",
+                    value = idleHeight,
+                    valueRange = 22f..40f,
+                    stepAmount = 1f,
+                    onValueChange = { idleHeight = it },
+                    onValueChangeFinished = {
+                        Prefs.setDynamicIslandIdleHeight(context, idleHeight.roundToInt())
                         EdgePanelService.refresh(context)
                     }
                 )

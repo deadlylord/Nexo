@@ -25,14 +25,32 @@ data class ScreenshotEntry(
     val timestamp: Long
 )
 
+data class NotificationQuickAction(
+    val title: String,
+    val intent: PendingIntent
+)
+
 data class NotificationPulse(
+    val key: String,
     val packageName: String,
     val appName: String,
     val title: String,
+    val textPreview: String,
     val appIcon: Bitmap?,
     val accentColor: Int?,
     val contentIntent: PendingIntent?,
+    val actions: List<NotificationQuickAction>,
     val timestamp: Long
+)
+
+data class CallPulse(
+    val key: String,
+    val packageName: String,
+    val callerName: String,
+    val statusText: String,
+    val appIcon: Bitmap?,
+    val contentIntent: PendingIntent?,
+    val startedAtMs: Long
 )
 
 /**
@@ -131,12 +149,52 @@ object ClipboardHistoryStore {
         }.getOrNull()
     }
 
+    @Volatile
+    var activeCall: CallPulse? = null
+        private set
+
+    fun recordCall(
+        context: Context,
+        key: String,
+        packageName: String,
+        callerName: String,
+        statusText: String,
+        contentIntent: PendingIntent?,
+        startedAtMs: Long
+    ): CallPulse {
+        val iconBitmap = runCatching {
+            context.packageManager.getApplicationIcon(packageName).toBitmap(72, 72)
+        }.getOrNull()
+        val existing = activeCall
+        val startTime = if (existing != null && existing.key == key) existing.startedAtMs else startedAtMs
+        val pulse = CallPulse(
+            key = key,
+            packageName = packageName,
+            callerName = callerName,
+            statusText = statusText,
+            appIcon = iconBitmap,
+            contentIntent = contentIntent,
+            startedAtMs = startTime
+        )
+        activeCall = pulse
+        return pulse
+    }
+
+    fun clearCall(key: String? = null) {
+        if (key == null || activeCall?.key == key) {
+            activeCall = null
+        }
+    }
+
     fun recordNotification(
         context: Context,
+        key: String = "",
         packageName: String,
         title: String = "",
+        textPreview: String = "",
         accentColor: Int?,
-        contentIntent: PendingIntent?
+        contentIntent: PendingIntent?,
+        actions: List<NotificationQuickAction> = emptyList()
     ): NotificationPulse {
         val pm = context.packageManager
         val appName = runCatching {
@@ -147,12 +205,15 @@ object ClipboardHistoryStore {
             pm.getApplicationIcon(packageName).toBitmap(72, 72)
         }.getOrNull()
         val pulse = NotificationPulse(
+            key = key,
             packageName = packageName,
             appName = appName,
             title = title,
+            textPreview = textPreview,
             appIcon = iconBitmap,
             accentColor = accentColor,
             contentIntent = contentIntent,
+            actions = actions,
             timestamp = System.currentTimeMillis()
         )
         latestNotification = pulse
