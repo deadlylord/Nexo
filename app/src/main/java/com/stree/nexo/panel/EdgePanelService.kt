@@ -46,17 +46,13 @@ class EdgePanelService : Service() {
     private var downRawX = 0f
     private var downRawY = 0f
     private var rejectedGesture = false
+    private var doubleTapHandled = false
     private val gestureHandler = Handler(Looper.getMainLooper())
     private val gestureScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var pullArmed = false
     private var pullTriggered = false
     private var holdX = 0f
     private var holdY = 0f
-    // Un toque abre el panel sin esperar los 300 ms del detector de doble
-    // toque; si llega un segundo toque, se cancela y se abren los controles.
-    private val openPanelRunnable = Runnable {
-        if (!pullTriggered) openPanel()
-    }
     private val holdAction = Runnable {
         if (pullArmed && !pullTriggered) {
             pullTriggered = true
@@ -80,8 +76,16 @@ class EdgePanelService : Service() {
     private val tapDetector by lazy {
         GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(event: MotionEvent) = true
+            override fun onSingleTapConfirmed(event: MotionEvent): Boolean {
+                if (!rejectedGesture && !pullTriggered && !doubleTapHandled) {
+                    openPanel()
+                }
+                return true
+            }
+
             override fun onDoubleTap(event: MotionEvent): Boolean {
-                gestureHandler.removeCallbacks(openPanelRunnable)
+                doubleTapHandled = true
+                gestureHandler.removeCallbacks(holdAction)
                 openControls("actions")
                 return true
             }
@@ -183,7 +187,6 @@ class EdgePanelService : Service() {
 
     private fun removeHandle() {
         gestureHandler.removeCallbacks(holdAction)
-        gestureHandler.removeCallbacks(openPanelRunnable)
         pullArmed = false
         val view = handleView ?: return
         runCatching { windowManager.removeView(view) }
@@ -191,21 +194,22 @@ class EdgePanelService : Service() {
     }
 
     private fun handleTouch(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            downRawX = event.rawX
+            downRawY = event.rawY
+            rejectedGesture = false
+            doubleTapHandled = false
+            pullArmed = false
+            pullTriggered = false
+            gestureHandler.removeCallbacks(holdAction)
+            handleView?.alpha = 1f
+        }
         tapDetector.onTouchEvent(event)
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                downRawX = event.rawX
-                downRawY = event.rawY
-                rejectedGesture = false
-                pullArmed = false
-                pullTriggered = false
-                gestureHandler.removeCallbacks(openPanelRunnable)
-                gestureHandler.removeCallbacks(holdAction)
-                handleView?.alpha = 1f
-                return true
-            }
+            MotionEvent.ACTION_DOWN -> return true
 
             MotionEvent.ACTION_MOVE -> {
+                if (doubleTapHandled) return true
                 val dx = event.rawX - downRawX
                 val dy = event.rawY - downRawY
                 // Un desplazamiento nunca abre el panel principal.
@@ -234,14 +238,10 @@ class EdgePanelService : Service() {
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 gestureHandler.removeCallbacks(holdAction)
-                if (event.actionMasked == MotionEvent.ACTION_CANCEL) {
-                    gestureHandler.removeCallbacks(openPanelRunnable)
-                }
                 pullArmed = false
-                if (event.actionMasked == MotionEvent.ACTION_UP && !rejectedGesture && !pullTriggered) {
-                    gestureHandler.postDelayed(openPanelRunnable, TAP_OPEN_DELAY_MS)
-                }
-                if (event.actionMasked == MotionEvent.ACTION_UP && rejectedGesture && !pullTriggered) {
+                if (event.actionMasked == MotionEvent.ACTION_UP &&
+                    !doubleTapHandled && rejectedGesture && !pullTriggered
+                ) {
                     val dx = event.rawX - downRawX
                     val dy = event.rawY - downRawY
                     val inward = if (Prefs.panelSide(this) == PanelSide.START) dx else -dx
@@ -360,9 +360,6 @@ class EdgePanelService : Service() {
         const val ACTION_STOP = "com.stree.nexo.action.STOP_PANEL"
         private const val ACTION_REFRESH = "com.stree.nexo.action.REFRESH_PANEL"
         private const val ACTION_WIDGET = "com.stree.nexo.action.SHOW_WIDGET"
-
-        /** Espera máxima para descartar un doble toque antes de abrir el panel. */
-        private const val TAP_OPEN_DELAY_MS = 200L
 
         /** Tiempo con el dedo quieto para volver a la app anterior. */
         private const val HOLD_DELAY_MS = 380L

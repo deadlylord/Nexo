@@ -15,9 +15,14 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Brightness6
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,24 +31,28 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import com.stree.nexo.data.Haptics
 import com.stree.nexo.data.PanelSide
 import com.stree.nexo.data.Prefs
 import com.stree.nexo.panel.EdgePanelService
 import com.stree.nexo.ui.ControlPanelPage
 import com.stree.nexo.ui.PanelMotion
 import com.stree.nexo.ui.PanelSurface
-import com.stree.nexo.ui.computePanelSize
 import com.stree.nexo.ui.disableSystemTransitions
 import com.stree.nexo.ui.finishNoSystemAnimation
+import com.stree.nexo.ui.gradientTint
 import com.stree.nexo.ui.panelCardTransition
 import com.stree.nexo.ui.theme.NexoTheme
 import com.stree.nexo.ui.theme.PanelTheme
+import com.stree.nexo.ui.theme.visualSpec
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** Brightness, audio and silence share their own pager, separate from launcher pages. */
+/** Brightness, audio and silence share their own compact low-positioned pager. */
 class ActivatorControlsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -54,7 +63,12 @@ class ActivatorControlsActivity : ComponentActivity() {
         val side = Prefs.panelSide(this)
         setContent {
             NexoTheme(darkTheme = true) {
-                PanelTheme(Prefs.panelStyle(this)) {
+                val style = remember(Prefs.themeRevision) { Prefs.panelStyle(this) }
+                val light = remember(Prefs.themeRevision) { Prefs.panelLightBackground(this) }
+                val themeSpec = remember(style, light) { style.visualSpec(light = light) }
+                val iconBrush = remember(themeSpec) { themeSpec.actionIconBrush }
+
+                PanelTheme(style) {
                     val modes = remember(mode) {
                         if (mode == "lastapp") listOf("lastapp") else listOf("brightness", "volume", "actions")
                     }
@@ -119,16 +133,32 @@ class ActivatorControlsActivity : ComponentActivity() {
                         ) {
                             BoxWithConstraints(
                                 modifier = Modifier.fillMaxSize(),
-                                contentAlignment = if (side == PanelSide.END) Alignment.CenterEnd else Alignment.CenterStart
+                                // Posicionado abajo, en la zona del teclado, para alcanzarlo con una mano.
+                                contentAlignment = if (side == PanelSide.END) Alignment.BottomEnd else Alignment.BottomStart
                             ) {
-                                val panelSize = computePanelSize(this@ActivatorControlsActivity, maxWidth, maxHeight)
+                                val navBarBottom = with(LocalDensity.current) {
+                                    WindowInsets.navigationBars.getBottom(this).toDp()
+                                }
+                                // Tamaño compacto propio, independiente del panel principal.
+                                val panelWidth = minOf(maxWidth * 0.62f, 260.dp)
+                                val panelHeight = minOf(maxHeight * 0.34f, 276.dp).coerceAtLeast(232.dp)
                                 val activeRealPage = realIndex(pager.currentPage)
+                                val tabItems = remember {
+                                    listOf(
+                                        Icons.Filled.Brightness6 to "Brillo",
+                                        Icons.AutoMirrored.Filled.VolumeUp to "Audio",
+                                        Icons.AutoMirrored.Filled.VolumeOff to "Silencio y asistente"
+                                    )
+                                }
+                                val activePillColor = themeSpec.primary.copy(alpha = 0.16f)
+
                                 HorizontalPager(
                                     state = pager,
                                     pageSpacing = 0.dp,
                                     modifier = Modifier
-                                        .width(panelSize.width)
-                                        .height(panelSize.height + 8.dp)
+                                        .padding(bottom = navBarBottom + 24.dp)
+                                        .width(panelWidth)
+                                        .height(panelHeight + 8.dp)
                                 ) { page ->
                                     Box(
                                         modifier = Modifier
@@ -148,32 +178,50 @@ class ActivatorControlsActivity : ComponentActivity() {
                                             Box(Modifier.weight(1f).fillMaxWidth()) {
                                                 ControlPanelPage(modes[realIndex(page)])
                                             }
-                                            if (modes.size > 1) Row(Modifier.fillMaxWidth()) {
-                                                listOf("Brillo", "Audio", "Silencio").forEachIndexed { index, label ->
-                                                    TextButton(
-                                                        onClick = {
-                                                            scope.launch {
-                                                                pager.animateScrollToPage(
-                                                                    nearestVirtualPage(index),
-                                                                    animationSpec = tween(
-                                                                        PanelMotion.TAB_DURATION_MS,
-                                                                        easing = PanelMotion.StandardEasing
+                                            if (modes.size > 1) {
+                                                HorizontalDivider(
+                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
+                                                    thickness = 0.5.dp,
+                                                    color = themeSpec.outlineVariant.copy(alpha = 0.28f)
+                                                )
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(bottom = 2.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    tabItems.forEachIndexed { index, (icon, label) ->
+                                                        val active = activeRealPage == index
+                                                        IconButton(
+                                                            onClick = {
+                                                                Haptics.perform(this@ActivatorControlsActivity)
+                                                                scope.launch {
+                                                                    pager.animateScrollToPage(
+                                                                        nearestVirtualPage(index),
+                                                                        animationSpec = tween(
+                                                                            PanelMotion.TAB_DURATION_MS,
+                                                                            easing = PanelMotion.StandardEasing
+                                                                        )
                                                                     )
+                                                                }
+                                                            },
+                                                            modifier = Modifier.weight(1f)
+                                                        ) {
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .size(34.dp)
+                                                                    .clip(CircleShape)
+                                                                    .background(if (active) activePillColor else Color.Transparent),
+                                                                contentAlignment = Alignment.Center
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = icon,
+                                                                    contentDescription = label,
+                                                                    modifier = Modifier.size(20.dp).gradientTint(iconBrush),
+                                                                    tint = Color.White
                                                                 )
                                                             }
-                                                        },
-                                                        modifier = Modifier.weight(1f)
-                                                    ) {
-                                                        Text(
-                                                            label,
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            maxLines = 1,
-                                                            color = if (activeRealPage == index) {
-                                                                MaterialTheme.colorScheme.primary
-                                                            } else {
-                                                                MaterialTheme.colorScheme.onSurfaceVariant
-                                                            }
-                                                        )
+                                                        }
                                                     }
                                                 }
                                             }

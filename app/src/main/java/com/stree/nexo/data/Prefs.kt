@@ -127,6 +127,13 @@ object Prefs {
         prefs(context).edit().putInt("last_ime_height_dp", heightDp.coerceIn(0, 520)).apply()
     }
 
+    fun savedStreamVolume(context: Context, stream: Int): Int =
+        prefs(context).getInt("saved_stream_vol_$stream", -1)
+
+    fun setSavedStreamVolume(context: Context, stream: Int, volume: Int) {
+        prefs(context).edit().putInt("saved_stream_vol_$stream", volume).apply()
+    }
+
     fun panelIconScale(context: Context): Float =
         prefs(context).getFloat("panel_icon_scale", 1f).coerceIn(0.75f, 1.35f)
 
