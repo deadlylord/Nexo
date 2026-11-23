@@ -448,4 +448,18 @@ object Prefs {
             .putString("pinned_slots", JSONObject(slots as Map<*, *>).toString())
             .apply()
     }
+
+    fun autoOpenOnUnlock(context: Context): Boolean =
+        prefs(context).getBoolean("auto_open_on_unlock", false)
+
+    fun setAutoOpenOnUnlock(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("auto_open_on_unlock", enabled).apply()
+    }
+
+    fun autoOpenOnUnlockSpotlight(context: Context): Boolean =
+        prefs(context).getBoolean("auto_open_on_unlock_spotlight", false)
+
+    fun setAutoOpenOnUnlockSpotlight(context: Context, spotlight: Boolean) {
+        prefs(context).edit().putBoolean("auto_open_on_unlock_spotlight", spotlight).apply()
+    }
 }

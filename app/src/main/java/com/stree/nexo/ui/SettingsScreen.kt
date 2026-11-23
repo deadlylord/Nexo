@@ -123,6 +123,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.stree.nexo.data.ActivatorStyle
 import com.stree.nexo.data.EdgeGesture
 import com.stree.nexo.data.EdgeGestureAction
+import com.stree.nexo.data.Haptics
 import com.stree.nexo.data.PanelPage
 import com.stree.nexo.data.PanelSide
 import com.stree.nexo.data.PanelStyle
@@ -684,6 +685,100 @@ private fun PanelHeroCard(
                                 MaterialTheme.colorScheme.onSurfaceVariant
                             }
                         )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            // Desplegar automáticamente al desbloquear el celular
+            var autoOpenUnlock by remember { mutableStateOf(Prefs.autoOpenOnUnlock(context)) }
+            var autoOpenSpotlight by remember { mutableStateOf(Prefs.autoOpenOnUnlockSpotlight(context)) }
+
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = "Desplegar al desbloquear",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = if (autoOpenUnlock) {
+                                    if (autoOpenSpotlight) "Abre Spotlight automáticamente al desbloquear"
+                                    else "Abre el panel lateral automáticamente al desbloquear"
+                                } else {
+                                    "Abre Nexo solo en cuanto desbloquees el teléfono"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = autoOpenUnlock,
+                            onCheckedChange = { enabled ->
+                                Haptics.perform(context)
+                                autoOpenUnlock = enabled
+                                Prefs.setAutoOpenOnUnlock(context, enabled)
+                                if (enabled && !panelEnabled) {
+                                    onTogglePanel(true)
+                                }
+                            }
+                        )
+                    }
+
+                    if (autoOpenUnlock) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                                .padding(3.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            listOf(
+                                false to "Panel lateral",
+                                true to "Spotlight"
+                            ).forEach { (isSpotlight, label) ->
+                                val selected = autoOpenSpotlight == isSpotlight
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(9.dp))
+                                        .background(
+                                            if (selected) MaterialTheme.colorScheme.primary
+                                            else Color.Transparent
+                                        )
+                                        .clickable {
+                                            Haptics.perform(context)
+                                            autoOpenSpotlight = isSpotlight
+                                            Prefs.setAutoOpenOnUnlockSpotlight(context, isSpotlight)
+                                        }
+                                        .padding(vertical = 7.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                        color = if (selected) {
+                                            MaterialTheme.colorScheme.onPrimary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }

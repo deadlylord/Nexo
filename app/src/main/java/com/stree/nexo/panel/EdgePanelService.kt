@@ -101,15 +101,60 @@ class EdgePanelService : Service() {
     private var stopwatchStartElapsed = 0L
     private var stopwatchAccumulatedMs = 0L
 
-    // Receptores del sistema (batería, modo de sonido y audio Bluetooth)
+    // Receptores del sistema (batería, modo de sonido, audio Bluetooth y desbloqueo)
     private var systemReceiverRegistered = false
     private var audioCallbackRegistered = false
     private var audioCallbackPrimed = false
     private var lastKnownRingerMode = -1
+    private var screenWasOff = false
+    private var lastUnlockOpenMs = 0L
+
+    private val autoOpenUnlockRunnable = Runnable {
+        if (!Prefs.autoOpenOnUnlock(this)) return@Runnable
+        if (!Settings.canDrawOverlays(this)) return@Runnable
+        if (panelUiVisible || hostUiVisible) return@Runnable
+        val keyguard = getSystemService(KeyguardManager::class.java)
+        if (keyguard?.isKeyguardLocked == true) return@Runnable
+        val audioMode = getSystemService(AudioManager::class.java)?.mode
+        if (audioMode == AudioManager.MODE_IN_CALL || audioMode == AudioManager.MODE_RINGTONE) return@Runnable
+
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastUnlockOpenMs < 1_500L) return@Runnable
+        lastUnlockOpenMs = now
+
+        if (Prefs.autoOpenOnUnlockSpotlight(this)) {
+            openSpotlight()
+        } else {
+            openPanel()
+        }
+    }
+
+    private fun scheduleAutoOpenOnUnlock() {
+        if (!Prefs.autoOpenOnUnlock(this)) return
+        gestureHandler.removeCallbacks(autoOpenUnlockRunnable)
+        // Breve pausa para que termine la animación de desbloqueo sin cancelar el panel ni el teclado.
+        gestureHandler.postDelayed(autoOpenUnlockRunnable, 280L)
+    }
 
     private val systemReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
+                Intent.ACTION_SCREEN_OFF -> {
+                    screenWasOff = true
+                    gestureHandler.removeCallbacks(autoOpenUnlockRunnable)
+                }
+                Intent.ACTION_USER_PRESENT -> {
+                    screenWasOff = false
+                    scheduleAutoOpenOnUnlock()
+                }
+                Intent.ACTION_SCREEN_ON -> {
+                    // En equipos sin bloqueo de pantalla Android no envía ACTION_USER_PRESENT.
+                    val locked = getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
+                    if (screenWasOff && !locked) {
+                        screenWasOff = false
+                        scheduleAutoOpenOnUnlock()
+                    }
+                }
                 Intent.ACTION_POWER_CONNECTED -> {
                     val pct = readBatteryPercent()
                     showIslandAlert(
@@ -409,6 +454,9 @@ class EdgePanelService : Service() {
                 val filter = IntentFilter().apply {
                     addAction(Intent.ACTION_POWER_CONNECTED)
                     addAction(AudioManager.RINGER_MODE_CHANGED_ACTION)
+                    addAction(Intent.ACTION_USER_PRESENT)
+                    addAction(Intent.ACTION_SCREEN_ON)
+                    addAction(Intent.ACTION_SCREEN_OFF)
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     registerReceiver(systemReceiver, filter, RECEIVER_NOT_EXPORTED)
