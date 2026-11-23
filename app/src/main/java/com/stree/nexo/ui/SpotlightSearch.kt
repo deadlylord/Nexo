@@ -146,6 +146,7 @@ fun SpotlightSearchContent(
     var actionItem by remember { mutableStateOf<SearchItem?>(null) }
     var widgetRevision by remember { mutableIntStateOf(0) }
     var fullscreenWidgetId by remember { mutableStateOf<String?>(null) }
+    var editingWidgetId by remember { mutableStateOf<String?>(null) }
 
     DisposableEffect(owner) {
         var listening = false
@@ -155,6 +156,7 @@ fun SpotlightSearchContent(
             } else if (listening) {
                 WidgetStore.stopListening(context)
                 listening = false
+                editingWidgetId = null
             }
         }
         val observer = LifecycleEventObserver { _, event ->
@@ -174,6 +176,9 @@ fun SpotlightSearchContent(
         if (fullscreenWidgetId != null && fullscreenWidgetId !in spotlightWidgetIds) {
             fullscreenWidgetId = null
         }
+        if (editingWidgetId != null && editingWidgetId !in spotlightWidgetIds) {
+            editingWidgetId = null
+        }
     }
 
     LaunchedEffect(autoFocus, fullscreenWidgetId) {
@@ -183,6 +188,10 @@ fun SpotlightSearchContent(
             delay(110)
             runCatching { focusRequester.requestFocus() }
         }
+    }
+
+    BackHandler(enabled = editingWidgetId != null && fullscreenWidgetId == null) {
+        editingWidgetId = null
     }
 
     BackHandler(enabled = fullscreenWidgetId != null) {
@@ -639,7 +648,7 @@ fun SpotlightSearchContent(
                                         color = primaryTextColor
                                     )
                                     Text(
-                                        text = "Toca para añadir widgets a lo ancho o expandirlos a pantalla completa.",
+                                        text = "Toca para añadir widgets limpios. Mantén pulsado sobre uno para redimensionarlo o abrirlo a pantalla completa.",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = mutedTextColor
                                     )
@@ -655,19 +664,24 @@ fun SpotlightSearchContent(
                     }
                 } else {
                     items(spotlightWidgetIds, key = { "spotlight_widget_$it" }) { widgetItemId ->
-                        SpotlightWidgetCard(
+                        CleanWidgetBox(
                             itemId = widgetItemId,
-                            cardColor = cardColor,
-                            cardBorder = cardBorder,
-                            primaryTextColor = primaryTextColor,
-                            mutedTextColor = mutedTextColor,
+                            editing = editingWidgetId == widgetItemId,
                             accentColor = spec.primary,
+                            barColor = spec.surface.copy(alpha = 0.94f),
+                            barBorderColor = cardBorder,
+                            allowHorizontalResize = true,
+                            minHeightDp = 110,
+                            maxHeightDp = 720,
+                            onEnterEdit = { editingWidgetId = widgetItemId },
+                            onExitEdit = { if (editingWidgetId == widgetItemId) editingWidgetId = null },
                             onExpandFullscreen = {
                                 Haptics.perform(context)
                                 fullscreenWidgetId = widgetItemId
                             },
                             onDelete = {
                                 Haptics.perform(context)
+                                if (editingWidgetId == widgetItemId) editingWidgetId = null
                                 WidgetStore.remove(context, widgetItemId)
                                 widgetRevision++
                             }
@@ -1124,150 +1138,6 @@ private fun evaluateSimpleMath(input: String): String? {
 }
 
 @Composable
-private fun SpotlightWidgetCard(
-    itemId: String,
-    cardColor: Color,
-    cardBorder: Color,
-    primaryTextColor: Color,
-    mutedTextColor: Color,
-    accentColor: Color,
-    onExpandFullscreen: () -> Unit,
-    onDelete: () -> Unit
-) {
-    val context = LocalContext.current
-    val density = LocalDensity.current.density
-    var binding by remember(itemId) { mutableStateOf(WidgetStore.get(context, itemId)) }
-    val current = binding ?: return
-    val info = remember(current.id) { AppWidgetManager.getInstance(context).getAppWidgetInfo(current.id) }
-    var resizing by remember { mutableStateOf(false) }
-    var cornerPosition by remember { mutableStateOf(Offset.Zero) }
-
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        color = cardColor,
-        border = BorderStroke(0.8.dp, cardBorder)
-    ) {
-        Column(Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 14.dp, end = 6.dp, top = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = info?.loadLabel(context.packageManager)?.toString() ?: "Widget no disponible",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = primaryTextColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                if (info != null) {
-                    IconButton(
-                        onClick = onExpandFullscreen,
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Fullscreen,
-                            contentDescription = "Pantalla completa",
-                            tint = accentColor,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-                IconButton(
-                    onClick = onDelete,
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Close,
-                        contentDescription = "Eliminar widget",
-                        tint = mutedTextColor,
-                        modifier = Modifier.size(17.dp)
-                    )
-                }
-            }
-
-            if (info != null) {
-                BoxWithConstraints(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 8.dp, end = 8.dp, bottom = 8.dp)
-                ) {
-                    val fullWidth = maxWidth.value.toInt().coerceAtLeast(120)
-                    val height = current.height.coerceIn(120, 720)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(height.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                    ) {
-                        AndroidView(
-                            factory = { WidgetStore.host(it).createView(it, current.id, info) },
-                            modifier = Modifier.fillMaxSize(),
-                            update = { view ->
-                                if (!resizing) {
-                                    if (Build.VERSION.SDK_INT >= 31) {
-                                        view.updateAppWidgetSize(
-                                            Bundle(),
-                                            listOf(SizeF(fullWidth.toFloat(), height.toFloat()))
-                                        )
-                                    } else {
-                                        @Suppress("DEPRECATION")
-                                        view.updateAppWidgetSize(null, fullWidth, height, fullWidth, height)
-                                    }
-                                }
-                            }
-                        )
-                        Surface(
-                            modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .size(30.dp)
-                                .onGloballyPositioned { cornerPosition = it.positionInRoot() }
-                                .pointerInput(current.id, fullWidth) {
-                                    var startPointer = Offset.Zero
-                                    var startHeight = 0
-                                    detectDragGestures(
-                                        onDragStart = {
-                                            startPointer = cornerPosition + it
-                                            startHeight = binding?.height?.coerceIn(120, 720) ?: height
-                                            resizing = true
-                                        },
-                                        onDrag = { change, _ ->
-                                            change.consume()
-                                            val movement = cornerPosition + change.position - startPointer
-                                            binding = binding?.copy(
-                                                width = fullWidth,
-                                                height = (startHeight + movement.y / density).toInt().coerceIn(120, 720)
-                                            )
-                                        },
-                                        onDragEnd = {
-                                            resizing = false
-                                            binding?.let { WidgetStore.put(context, itemId, it) }
-                                        },
-                                        onDragCancel = {
-                                            resizing = false
-                                            binding?.let { WidgetStore.put(context, itemId, it) }
-                                        }
-                                    )
-                                },
-                            color = accentColor.copy(alpha = 0.22f),
-                            shape = RoundedCornerShape(topStart = 10.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text("◢", color = accentColor, fontSize = 12.sp)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun FullscreenSpotlightWidget(
     itemId: String,
     cardColor: Color,
@@ -1287,19 +1157,19 @@ private fun FullscreenSpotlightWidget(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
+            shape = RoundedCornerShape(999.dp),
             color = cardColor,
             border = BorderStroke(0.8.dp, cardBorder)
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(horizontal = 14.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
@@ -1311,6 +1181,27 @@ private fun FullscreenSpotlightWidget(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
+                if (binding != null && info?.configure != null) {
+                    IconButton(
+                        onClick = {
+                            Haptics.perform(context)
+                            runCatching {
+                                context.startActivity(
+                                    WidgetPickerActivity.reconfigureIntent(context, itemId, binding.id)
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }
+                        },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Tune,
+                            contentDescription = "Reconfigurar widget",
+                            tint = primaryTextColor.copy(alpha = 0.85f),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
                 TextButton(
                     onClick = onExitFullscreen,
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
@@ -1343,47 +1234,35 @@ private fun FullscreenSpotlightWidget(
             }
         }
 
-        Surface(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
-            shape = RoundedCornerShape(22.dp),
-            color = cardColor,
-            border = BorderStroke(0.8.dp, cardBorder)
-        ) {
-            if (binding != null && info != null) {
-                BoxWithConstraints(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(8.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                ) {
-                    val width = maxWidth.value.toInt().coerceAtLeast(160)
-                    val height = maxHeight.value.toInt().coerceAtLeast(160)
-                    AndroidView(
-                        factory = { WidgetStore.host(it).createView(it, binding.id, info) },
-                        modifier = Modifier.fillMaxSize(),
-                        update = { view ->
-                            if (Build.VERSION.SDK_INT >= 31) {
-                                view.updateAppWidgetSize(
-                                    Bundle(),
-                                    listOf(SizeF(width.toFloat(), height.toFloat()))
-                                )
-                            } else {
-                                @Suppress("DEPRECATION")
-                                view.updateAppWidgetSize(null, width, height, width, height)
-                            }
-                        }
-                    )
-                }
-            } else {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = "Widget no disponible",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = primaryTextColor
-                    )
-                }
+        if (binding != null && info != null) {
+            BoxWithConstraints(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+            ) {
+                val width = maxWidth.value.toInt().coerceAtLeast(160)
+                val height = maxHeight.value.toInt().coerceAtLeast(160)
+                AndroidView(
+                    factory = { WidgetStore.host(it).createView(it, binding.id, info) },
+                    modifier = Modifier.fillMaxSize(),
+                    update = { view ->
+                        WidgetStore.applyWidgetSize(view, width, height)
+                    }
+                )
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Widget no disponible",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = primaryTextColor
+                )
             }
         }
     }
