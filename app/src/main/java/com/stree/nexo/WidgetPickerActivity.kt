@@ -42,6 +42,7 @@ class WidgetPickerActivity : ComponentActivity() {
     private var configureLaunchedAtMs = 0L
     private var listening = false
     private lateinit var itemId: String
+    private var tabId: String? = null
     private val manager by lazy { AppWidgetManager.getInstance(this) }
 
     private val bind = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -72,6 +73,7 @@ class WidgetPickerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         itemId = intent.getStringExtra("item_id") ?: run { finish(); return }
+        tabId = intent.getStringExtra(EXTRA_TAB_ID)
         reconfigureMode = intent.getBooleanExtra(EXTRA_RECONFIGURE, false)
         pendingId = savedInstanceState?.getInt("pending_id", -1) ?: -1
 
@@ -371,9 +373,14 @@ class WidgetPickerActivity : ComponentActivity() {
             WidgetBinding(
                 id = pendingId,
                 width = old?.width ?: defaultWidth,
-                height = old?.height ?: defaultHeight
+                height = old?.height ?: defaultHeight,
+                edgeToEdge = old?.edgeToEdge ?: false
             )
         )
+        if (itemId.startsWith("spotlight-widget:")) {
+            val targetTab = tabId ?: WidgetStore.selectedSpotlightTabId(this)
+            WidgetStore.assignSpotlightWidgetToTab(this, itemId, targetTab)
+        }
         pendingId = -1
         if (!WidgetStore.isEmbeddedPanelWidget(itemId)) EdgePanelService.showWidget(this, itemId)
         finish()
@@ -410,6 +417,7 @@ class WidgetPickerActivity : ComponentActivity() {
         private const val REQUEST_CONFIGURE = 7701
         private const val EXTRA_RECONFIGURE = "reconfigure"
         private const val EXTRA_EXISTING_WIDGET_ID = "existing_widget_id"
+        const val EXTRA_TAB_ID = "tab_id"
 
         fun reconfigureIntent(context: Context, itemId: String, appWidgetId: Int): Intent =
             Intent(context, WidgetPickerActivity::class.java)

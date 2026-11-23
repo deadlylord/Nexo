@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -41,7 +42,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.OpenInBrowser
@@ -49,9 +49,7 @@ import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.ViewSidebar
 import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -96,9 +94,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.stree.nexo.ActivatorControlsActivity
-import com.stree.nexo.QuickClipActivity
-import com.stree.nexo.SearchActivity
 import com.stree.nexo.WidgetPickerActivity
 import com.stree.nexo.data.ClipboardHistoryStore
 import com.stree.nexo.data.Haptics
@@ -106,9 +101,17 @@ import com.stree.nexo.data.ItemType
 import com.stree.nexo.data.Prefs
 import com.stree.nexo.data.SearchItem
 import com.stree.nexo.data.SearchUiState
+import com.stree.nexo.search.AiLauncher
 import com.stree.nexo.search.ItemLauncher
 import com.stree.nexo.ui.theme.visualSpec
 import com.stree.nexo.widget.WidgetStore
+import com.stree.nexo.widget.WidgetTab
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import kotlinx.coroutines.delay
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -146,7 +149,15 @@ fun SpotlightSearchContent(
     var actionItem by remember { mutableStateOf<SearchItem?>(null) }
     var widgetRevision by remember { mutableIntStateOf(0) }
     var fullscreenWidgetId by remember { mutableStateOf<String?>(null) }
-    var editingWidgetId by remember { mutableStateOf<String?>(null) }
+    var widgetEditMode by remember { mutableStateOf(false) }
+    var selectedTabId by remember { mutableStateOf(WidgetStore.selectedSpotlightTabId(context)) }
+    var editingTab by remember { mutableStateOf<WidgetTab?>(null) }
+    var creatingTab by remember { mutableStateOf(false) }
+    var movingWidgetId by remember { mutableStateOf<String?>(null) }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val listState = rememberLazyListState()
+    val currentQueryChange by rememberUpdatedState(onQueryChange)
+    val dictation = rememberNexoDictation { spoken -> currentQueryChange(spoken) }
 
     DisposableEffect(owner) {
         var listening = false
@@ -156,7 +167,8 @@ fun SpotlightSearchContent(
             } else if (listening) {
                 WidgetStore.stopListening(context)
                 listening = false
-                editingWidgetId = null
+                widgetEditMode = false
+                dictation.stop()
             }
         }
         val observer = LifecycleEventObserver { _, event ->
@@ -171,13 +183,18 @@ fun SpotlightSearchContent(
         }
     }
 
-    val spotlightWidgetIds = remember(widgetRevision) { WidgetStore.spotlightItems(context) }
+    val widgetTabs = remember(widgetRevision) { WidgetStore.spotlightTabs(context) }
+    LaunchedEffect(widgetTabs) {
+        if (widgetTabs.none { it.id == selectedTabId }) {
+            selectedTabId = widgetTabs.first().id
+        }
+    }
+    val spotlightWidgetIds = remember(widgetRevision, selectedTabId) {
+        WidgetStore.spotlightItemsForTab(context, selectedTabId)
+    }
     LaunchedEffect(spotlightWidgetIds, fullscreenWidgetId) {
         if (fullscreenWidgetId != null && fullscreenWidgetId !in spotlightWidgetIds) {
             fullscreenWidgetId = null
-        }
-        if (editingWidgetId != null && editingWidgetId !in spotlightWidgetIds) {
-            editingWidgetId = null
         }
     }
 
@@ -190,8 +207,19 @@ fun SpotlightSearchContent(
         }
     }
 
-    BackHandler(enabled = editingWidgetId != null && fullscreenWidgetId == null) {
-        editingWidgetId = null
+    // Al deslizar la lista hacia los widgets se esconde el teclado.
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .collect { scrolling ->
+                if (scrolling) {
+                    keyboard?.hide()
+                    focusManager.clearFocus()
+                }
+            }
+    }
+
+    BackHandler(enabled = widgetEditMode && fullscreenWidgetId == null) {
+        widgetEditMode = false
     }
 
     BackHandler(enabled = fullscreenWidgetId != null) {
@@ -200,8 +228,10 @@ fun SpotlightSearchContent(
 
     val openWidgetPicker: () -> Unit = {
         Haptics.perform(context)
+        widgetEditMode = false
         val intent = Intent(context, WidgetPickerActivity::class.java)
             .putExtra("item_id", "spotlight-widget:${System.currentTimeMillis()}:${UUID.randomUUID()}")
+            .putExtra(WidgetPickerActivity.EXTRA_TAB_ID, selectedTabId)
         if (context !is Activity) {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
@@ -393,6 +423,12 @@ fun SpotlightSearchContent(
                             }
                         }
                     }
+                    NexoMicButton(
+                        dictation = dictation,
+                        idleTint = mutedTextColor,
+                        activeColor = spec.primary,
+                        size = 32.dp
+                    )
                 }
             }
 
@@ -411,7 +447,24 @@ fun SpotlightSearchContent(
             }
         }
 
+        if (query.isEmpty()) {
+            AiLiveChipsRow(
+                accent = spec.primary,
+                textColor = primaryTextColor,
+                chipColor = cardColor,
+                borderColor = cardBorder,
+                onGeminiLive = {
+                    if (AiLauncher.startGeminiLive(context)) onCancel?.invoke()
+                },
+                onChatGptVoice = {
+                    if (AiLauncher.startChatGptVoice(context)) onCancel?.invoke()
+                },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+            )
+        }
+
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
@@ -474,113 +527,14 @@ fun SpotlightSearchContent(
                     }
                 }
 
-                // 2. Accesos rápidos de Nexo (portapapeles, controles, panel, gesto)
-                item(key = "spotlight_quick_actions") {
-                    SpotlightCard(
-                        title = "Acciones rápidas de Nexo",
-                        cardColor = cardColor,
-                        cardBorder = cardBorder,
-                        headerColor = mutedTextColor
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                SpotlightQuickTile(
-                                    icon = Icons.Filled.ContentPaste,
-                                    label = "Portapapeles",
-                                    iconBrush = iconBrush,
-                                    textColor = primaryTextColor,
-                                    bgColor = spec.surfaceVariant.copy(alpha = 0.45f),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Haptics.perform(context)
-                                    runCatching {
-                                        context.startActivity(
-                                            Intent(context, QuickClipActivity::class.java)
-                                                .putExtra("mode", "clipboard")
-                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
-                                        )
-                                    }
-                                    onCancel?.invoke()
-                                }
-                                SpotlightQuickTile(
-                                    icon = Icons.Filled.Tune,
-                                    label = "Controles",
-                                    iconBrush = iconBrush,
-                                    textColor = primaryTextColor,
-                                    bgColor = spec.surfaceVariant.copy(alpha = 0.45f),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Haptics.perform(context)
-                                    runCatching {
-                                        context.startActivity(
-                                            Intent(context, ActivatorControlsActivity::class.java)
-                                                .putExtra("control", "actions")
-                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
-                                        )
-                                    }
-                                    onCancel?.invoke()
-                                }
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                SpotlightQuickTile(
-                                    icon = Icons.Filled.ViewSidebar,
-                                    label = "Panel lateral",
-                                    iconBrush = iconBrush,
-                                    textColor = primaryTextColor,
-                                    bgColor = spec.surfaceVariant.copy(alpha = 0.45f),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Haptics.perform(context)
-                                    runCatching {
-                                        context.startActivity(
-                                            Intent(context, SearchActivity::class.java)
-                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
-                                        )
-                                    }
-                                    onCancel?.invoke()
-                                }
-                                if (onOpenGestureSettings != null) {
-                                    SpotlightQuickTile(
-                                        icon = Icons.Filled.TouchApp,
-                                        label = "Asignar gesto",
-                                        iconBrush = iconBrush,
-                                        textColor = primaryTextColor,
-                                        bgColor = spec.primary.copy(alpha = 0.16f),
-                                        modifier = Modifier.weight(1f),
-                                        onClick = onOpenGestureSettings
-                                    )
-                                } else if (onPinSpotlightShortcut != null) {
-                                    SpotlightQuickTile(
-                                        icon = Icons.Filled.OpenInNew,
-                                        label = "Acceso inicio",
-                                        iconBrush = iconBrush,
-                                        textColor = primaryTextColor,
-                                        bgColor = spec.primary.copy(alpha = 0.16f),
-                                        modifier = Modifier.weight(1f),
-                                        onClick = onPinSpotlightShortcut
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
                 // 3. Widgets de pantalla completa en el panel estilo iPhone
                 item(key = "spotlight_widgets_header") {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(start = 6.dp, end = 2.dp, top = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
                             text = "WIDGETS",
@@ -590,6 +544,34 @@ fun SpotlightSearchContent(
                             letterSpacing = 0.7.sp,
                             modifier = Modifier.weight(1f)
                         )
+                        Surface(
+                            onClick = {
+                                Haptics.perform(context)
+                                widgetEditMode = !widgetEditMode
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (widgetEditMode) spec.primary.copy(alpha = 0.24f) else Color.Transparent,
+                            border = BorderStroke(0.8.dp, spec.primary.copy(alpha = if (widgetEditMode) 0.55f else 0.3f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (widgetEditMode) Icons.Filled.Check else Icons.Filled.Edit,
+                                    contentDescription = if (widgetEditMode) "Terminar edición" else "Editar widgets",
+                                    tint = spec.primary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = if (widgetEditMode) "Listo" else "Editar",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = spec.primary
+                                )
+                            }
+                        }
                         Surface(
                             onClick = openWidgetPicker,
                             shape = RoundedCornerShape(12.dp),
@@ -616,6 +598,25 @@ fun SpotlightSearchContent(
                             }
                         }
                     }
+                }
+
+                item(key = "spotlight_widget_tabs") {
+                    SpotlightWidgetTabsRow(
+                        tabs = widgetTabs,
+                        selectedId = selectedTabId,
+                        editing = widgetEditMode,
+                        accent = spec.primary,
+                        textColor = primaryTextColor,
+                        mutedColor = mutedTextColor,
+                        borderColor = cardBorder,
+                        onSelect = { id ->
+                            Haptics.perform(context)
+                            selectedTabId = id
+                            WidgetStore.setSelectedSpotlightTabId(context, id)
+                        },
+                        onEditTab = { tab -> editingTab = tab },
+                        onAddTab = { creatingTab = true }
+                    )
                 }
 
                 if (spotlightWidgetIds.isEmpty()) {
@@ -648,7 +649,7 @@ fun SpotlightSearchContent(
                                         color = primaryTextColor
                                     )
                                     Text(
-                                        text = "Toca para añadir widgets limpios. Mantén pulsado sobre uno para redimensionarlo o abrirlo a pantalla completa.",
+                                        text = "Toca para añadir widgets a esta pestaña. Usa el lápiz para redimensionar, ajustar a bordes, reordenar o crear pestañas.",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = mutedTextColor
                                     )
@@ -663,25 +664,41 @@ fun SpotlightSearchContent(
                         }
                     }
                 } else {
-                    items(spotlightWidgetIds, key = { "spotlight_widget_$it" }) { widgetItemId ->
+                    itemsIndexed(spotlightWidgetIds, key = { _, id -> "spotlight_widget_$id" }) { index, widgetItemId ->
                         CleanWidgetBox(
                             itemId = widgetItemId,
-                            editing = editingWidgetId == widgetItemId,
+                            editing = widgetEditMode,
                             accentColor = spec.primary,
                             barColor = spec.surface.copy(alpha = 0.94f),
                             barBorderColor = cardBorder,
                             allowHorizontalResize = true,
                             minHeightDp = 110,
                             maxHeightDp = 720,
-                            onEnterEdit = { editingWidgetId = widgetItemId },
-                            onExitEdit = { if (editingWidgetId == widgetItemId) editingWidgetId = null },
+                            allowEdgeToEdgeToggle = true,
+                            edgeBleedDp = 16,
+                            longPressToEdit = false,
+                            onExitEdit = { widgetEditMode = false },
                             onExpandFullscreen = {
                                 Haptics.perform(context)
                                 fullscreenWidgetId = widgetItemId
                             },
+                            onMoveUp = if (index > 0) {
+                                {
+                                    WidgetStore.moveSpotlightWidgetInTab(context, selectedTabId, widgetItemId, -1)
+                                    widgetRevision++
+                                }
+                            } else null,
+                            onMoveDown = if (index < spotlightWidgetIds.lastIndex) {
+                                {
+                                    WidgetStore.moveSpotlightWidgetInTab(context, selectedTabId, widgetItemId, 1)
+                                    widgetRevision++
+                                }
+                            } else null,
+                            onMoveToTab = if (widgetTabs.size > 1) {
+                                { movingWidgetId = widgetItemId }
+                            } else null,
                             onDelete = {
                                 Haptics.perform(context)
-                                if (editingWidgetId == widgetItemId) editingWidgetId = null
                                 WidgetStore.remove(context, widgetItemId)
                                 widgetRevision++
                             }
@@ -812,7 +829,23 @@ fun SpotlightSearchContent(
                     }
                 }
 
-                // 4. Búsqueda en la web / abrir URL
+                // 4. Preguntar a una IA con el texto escrito
+                item(key = "spotlight_ai_ask") {
+                    AiAskChipsRow(
+                        accent = spec.primary,
+                        textColor = primaryTextColor,
+                        chipColor = cardColor,
+                        borderColor = cardBorder,
+                        onAskGemini = {
+                            if (AiLauncher.queryGemini(context, query)) onCancel?.invoke()
+                        },
+                        onAskChatGpt = {
+                            if (AiLauncher.queryChatGpt(context, query)) onCancel?.invoke()
+                        }
+                    )
+                }
+
+                // 5. Búsqueda en la web / abrir URL
                 item(key = "spotlight_web") {
                     SpotlightCard(
                         title = "Web",
@@ -883,6 +916,59 @@ fun SpotlightSearchContent(
                 }
             }
         }
+    }
+
+    if (creatingTab || editingTab != null) {
+        val tab = editingTab
+        val tabIndex = tab?.let { t -> widgetTabs.indexOfFirst { it.id == t.id } } ?: -1
+        WidgetTabEditorDialog(
+            tab = tab,
+            canDelete = tab != null && widgetTabs.size > 1,
+            canMoveLeft = tabIndex > 0,
+            canMoveRight = tabIndex in 0 until widgetTabs.lastIndex,
+            onDismiss = {
+                creatingTab = false
+                editingTab = null
+            },
+            onSave = { name, icon ->
+                if (tab == null) {
+                    val created = WidgetStore.addSpotlightTab(context, name, icon)
+                    selectedTabId = created.id
+                    WidgetStore.setSelectedSpotlightTabId(context, created.id)
+                } else {
+                    WidgetStore.updateSpotlightTab(context, tab.id, name, icon)
+                }
+                creatingTab = false
+                editingTab = null
+                widgetRevision++
+            },
+            onMove = { delta ->
+                if (tab != null) {
+                    WidgetStore.moveSpotlightTab(context, tab.id, delta)
+                    widgetRevision++
+                }
+            },
+            onDelete = {
+                if (tab != null && WidgetStore.deleteSpotlightTab(context, tab.id)) {
+                    selectedTabId = WidgetStore.selectedSpotlightTabId(context)
+                }
+                editingTab = null
+                widgetRevision++
+            }
+        )
+    }
+
+    movingWidgetId?.let { widgetId ->
+        MoveWidgetToTabDialog(
+            tabs = widgetTabs,
+            currentTabId = selectedTabId,
+            onDismiss = { movingWidgetId = null },
+            onPick = { targetTab ->
+                WidgetStore.assignSpotlightWidgetToTab(context, widgetId, targetTab)
+                movingWidgetId = null
+                widgetRevision++
+            }
+        )
     }
 
     actionItem?.let { item ->
@@ -1004,47 +1090,6 @@ private fun SpotlightResultRow(
                     modifier = Modifier.size(18.dp)
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun SpotlightQuickTile(
-    icon: ImageVector,
-    label: String,
-    iconBrush: Brush,
-    textColor: Color,
-    bgColor: Color,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    Surface(
-        onClick = onClick,
-        modifier = modifier.height(44.dp),
-        shape = RoundedCornerShape(14.dp),
-        color = bgColor
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier
-                    .size(18.dp)
-                    .gradientTint(iconBrush),
-                tint = Color.White
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = textColor,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
         }
     }
 }

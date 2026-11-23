@@ -205,7 +205,9 @@ import com.stree.nexo.data.PlayStore
 import com.stree.nexo.media.MediaControlService
 import com.stree.nexo.media.OpenMusicResult
 import com.stree.nexo.search.ItemLauncher
+import com.stree.nexo.search.AiLauncher
 import com.stree.nexo.search.WhatsAppLinks
+import androidx.compose.runtime.snapshotFlow
 import com.stree.nexo.ui.theme.visualSpec
 import java.text.Collator
 import kotlinx.coroutines.delay
@@ -337,10 +339,23 @@ fun SearchField(
             )
         },
         trailingIcon = {
-            if (query.isNotEmpty()) {
-                IconButton(onClick = { onQueryChange("") }) {
-                    Icon(Icons.Filled.Close, contentDescription = "Borrar búsqueda")
+            val currentQueryChange by rememberUpdatedState(onQueryChange)
+            val dictation = rememberNexoDictation { spoken -> currentQueryChange(spoken) }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(end = 4.dp)
+            ) {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { onQueryChange("") }) {
+                        Icon(Icons.Filled.Close, contentDescription = "Borrar búsqueda")
+                    }
                 }
+                NexoMicButton(
+                    dictation = dictation,
+                    idleTint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    activeColor = MaterialTheme.colorScheme.primary,
+                    size = 36.dp
+                )
             }
         },
         singleLine = true,
@@ -384,6 +399,19 @@ fun SearchContent(
         )
 
         Spacer(Modifier.height(6.dp))
+
+        if (state.query.isNotBlank()) {
+            AiAskChipsRow(
+                accent = MaterialTheme.colorScheme.primary,
+                textColor = MaterialTheme.colorScheme.onSurface,
+                chipColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                onAskGemini = { AiLauncher.queryGemini(context, state.query) },
+                onAskChatGpt = { AiLauncher.queryChatGpt(context, state.query) },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+            )
+            Spacer(Modifier.height(4.dp))
+        }
 
         SearchBody(
             state = state,
@@ -1353,7 +1381,23 @@ fun SearchPanel(
         if (pages.getOrNull(realPageIndex(pagerState.currentPage)) != PanelPage.MAIN) {
             awaitingInitialIme = false
             keyboard?.hide()
+            focusManager.clearFocus(force = true)
         }
+    }
+    // Al empezar a deslizar hacia otra página (p. ej. Widgets) el teclado se
+    // esconde de inmediato, sin esperar a que la página se asiente.
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.isScrollInProgress to pagerState.targetPage }
+            .collect { (scrolling, target) ->
+                if (scrolling && pages.getOrNull(realPageIndex(target)) != PanelPage.MAIN) {
+                    awaitingInitialIme = false
+                    keyboard?.hide()
+                    focusManager.clearFocus(force = true)
+                    context.findActivity()?.window?.let {
+                        WindowCompat.getInsetsController(it, view).hide(WindowInsetsCompat.Type.ime())
+                    }
+                }
+            }
     }
 
     val playback by MediaControlService.playback.collectAsStateWithLifecycle()
@@ -1578,6 +1622,19 @@ fun SearchPanel(
                                     .padding(horizontal = 6.dp)
                             ) {
                                 if (state.query.isNotBlank()) {
+                                    AiAskChipsRow(
+                                        accent = themeSpec.primary,
+                                        textColor = themeSpec.onSurface,
+                                        chipColor = themeSpec.surfaceVariant.copy(alpha = 0.5f),
+                                        borderColor = themeSpec.outlineVariant.copy(alpha = 0.3f),
+                                        onAskGemini = {
+                                            if (AiLauncher.queryGemini(context, state.query)) dismissPanel()
+                                        },
+                                        onAskChatGpt = {
+                                            if (AiLauncher.queryChatGpt(context, state.query)) dismissPanel()
+                                        },
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+                                    )
                                     SearchBody(
                                         state = state,
                                         onItemClick = launchPanelItem,

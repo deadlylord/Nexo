@@ -24,7 +24,7 @@ import com.stree.nexo.ui.theme.visualSpec
 
 /**
  * Ventana overlay real para widgets flotantes:
- * - En reposo muestra el widget puro sin recuadro gris, sin barra fija ni esquina.
+ * - En reposo muestra el widget limpio con un botón X discreto en la esquina superior derecha para cerrarlo al instante.
  * - Al mantener pulsado entra en modo edición: permite arrastrar para moverlo,
  *   redimensionarlo con puntos circulares, reconfigurarlo o cerrarlo.
  */
@@ -110,10 +110,40 @@ class FloatingWidgetController(private val context: Context) {
             visibility = View.GONE
         }
 
+        // Botón X permanente y discreto en la esquina superior derecha para cerrar el widget
+        val permanentCloseHit = FrameLayout(context).apply {
+            contentDescription = "Cerrar widget flotante"
+            val circle = TextView(context).apply {
+                text = "✕"
+                textSize = 12f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                includeFontPadding = false
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.argb(182, 18, 20, 28))
+                    setStroke(px(1), Color.argb(110, 255, 255, 255))
+                }
+                elevation = px(4).toFloat()
+            }
+            addView(circle, FrameLayout.LayoutParams(px(26), px(26), Gravity.CENTER))
+            setOnClickListener {
+                Haptics.perform(context)
+                close()
+            }
+        }
+
         val widgetArea = FrameLayout(context).apply {
             addView(widgetWrapper, FrameLayout.LayoutParams(-1, -1))
             addView(moveOverlay, FrameLayout.LayoutParams(-1, -1))
             addView(editBorderOverlay, FrameLayout.LayoutParams(-1, -1))
+            addView(
+                permanentCloseHit,
+                FrameLayout.LayoutParams(px(36), px(36), Gravity.TOP or Gravity.END).apply {
+                    topMargin = px(4)
+                    marginEnd = px(4)
+                }
+            )
         }
         container.addView(widgetArea, FrameLayout.LayoutParams(-1, -1))
 
