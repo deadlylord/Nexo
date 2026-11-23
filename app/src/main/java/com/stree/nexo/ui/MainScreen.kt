@@ -70,6 +70,7 @@ enum class MainTab(val label: String) {
 @Composable
 fun MainScreen(
     settingsRequest: Int = 0,
+    spotlightRequest: Int = 0,
     state: SearchUiState,
     panelEnabled: Boolean,
     panelSide: PanelSide,
@@ -94,7 +95,15 @@ fun MainScreen(
     val context = LocalContext.current
     var tab by rememberSaveable { mutableStateOf(MainTab.SEARCH) }
     var settingsSection by remember { mutableStateOf(SettingsSectionFilter.OVERVIEW) }
-    var spotlightMode by remember { mutableStateOf(Prefs.mainSpotlightMode(context)) }
+    var spotlightMode by remember { mutableStateOf(true) }
+
+    LaunchedEffect(spotlightRequest) {
+        if (spotlightRequest > 0) {
+            tab = MainTab.SEARCH
+            spotlightMode = true
+            Prefs.setMainSpotlightMode(context, true)
+        }
+    }
 
     LaunchedEffect(settingsRequest) {
         if (settingsRequest > 0) {

@@ -39,6 +39,7 @@ class MainActivity : ComponentActivity() {
     private var contactsEnabledState by mutableStateOf(false)
     private var hapticsState by mutableStateOf(true)
     private var settingsRequest by mutableStateOf(0)
+    private var spotlightRequest by mutableStateOf(0)
 
     private val contactsPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -87,7 +88,11 @@ class MainActivity : ComponentActivity() {
         Haptics.perform(this)
         syncFromPreferences()
 
-        if (intent.getBooleanExtra("open_settings", false)) settingsRequest++
+        if (intent.getBooleanExtra("open_settings", false)) {
+            settingsRequest++
+        } else if (savedInstanceState == null) {
+            spotlightRequest++
+        }
 
         setContent {
             NexoTheme {
@@ -95,6 +100,7 @@ class MainActivity : ComponentActivity() {
 
                 MainScreen(
                     settingsRequest = settingsRequest,
+                    spotlightRequest = spotlightRequest,
                     state = state,
                     panelEnabled = panelEnabledState,
                     panelSide = panelSideState,
@@ -144,7 +150,11 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.getBooleanExtra("open_settings", false)) settingsRequest++
+        if (intent.getBooleanExtra("open_settings", false)) {
+            settingsRequest++
+        } else if (intent.getStringExtra("call_contact_number") == null) {
+            spotlightRequest++
+        }
         window.decorView.post { consumePanelCall() }
     }
 

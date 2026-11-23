@@ -30,8 +30,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -107,12 +105,16 @@ import com.stree.nexo.ui.theme.visualSpec
 import com.stree.nexo.widget.WidgetStore
 import com.stree.nexo.widget.WidgetTab
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.util.UUID
@@ -184,11 +186,45 @@ fun SpotlightSearchContent(
     }
 
     val widgetTabs = remember(widgetRevision) { WidgetStore.spotlightTabs(context) }
+    val latestTabs by rememberUpdatedState(widgetTabs)
+    val pagerScope = rememberCoroutineScope()
+    val selectedTabIndex = widgetTabs.indexOfFirst { it.id == selectedTabId }.coerceAtLeast(0)
+    val tabPagerState = rememberPagerState(
+        initialPage = selectedTabIndex,
+        pageCount = { widgetTabs.size.coerceAtLeast(1) }
+    )
+
     LaunchedEffect(widgetTabs) {
         if (widgetTabs.none { it.id == selectedTabId }) {
             selectedTabId = widgetTabs.first().id
         }
     }
+    LaunchedEffect(selectedTabIndex, widgetTabs.size) {
+        val clamped = selectedTabIndex.coerceIn(0, (widgetTabs.size - 1).coerceAtLeast(0))
+        if (!tabPagerState.isScrollInProgress && tabPagerState.currentPage != clamped) {
+            tabPagerState.scrollToPage(clamped)
+        }
+    }
+    LaunchedEffect(tabPagerState) {
+        snapshotFlow { tabPagerState.settledPage }
+            .collect { page ->
+                val tab = latestTabs.getOrNull(page)
+                if (tab != null && tab.id != selectedTabId) {
+                    selectedTabId = tab.id
+                    WidgetStore.setSelectedSpotlightTabId(context, tab.id)
+                }
+            }
+    }
+    LaunchedEffect(tabPagerState) {
+        snapshotFlow { tabPagerState.isScrollInProgress }
+            .collect { swiping ->
+                if (swiping) {
+                    keyboard?.hide()
+                    focusManager.clearFocus()
+                }
+            }
+    }
+
     val spotlightWidgetIds = remember(widgetRevision, selectedTabId) {
         WidgetStore.spotlightItemsForTab(context, selectedTabId)
     }
@@ -468,7 +504,7 @@ fun SpotlightSearchContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 24.dp),
+            contentPadding = PaddingValues(top = 6.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             if (query.isEmpty()) {
@@ -532,7 +568,7 @@ fun SpotlightSearchContent(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = 6.dp, end = 2.dp, top = 2.dp),
+                            .padding(start = 22.dp, end = 18.dp, top = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
@@ -613,96 +649,122 @@ fun SpotlightSearchContent(
                             Haptics.perform(context)
                             selectedTabId = id
                             WidgetStore.setSelectedSpotlightTabId(context, id)
+                            val targetIndex = widgetTabs.indexOfFirst { it.id == id }
+                            if (targetIndex >= 0 && targetIndex != tabPagerState.currentPage) {
+                                pagerScope.launch { tabPagerState.animateScrollToPage(targetIndex) }
+                            }
                         },
                         onEditTab = { tab -> editingTab = tab },
-                        onAddTab = { creatingTab = true }
+                        onAddTab = { creatingTab = true },
+                        modifier = Modifier.padding(horizontal = 16.dp)
                     )
                 }
 
-                if (spotlightWidgetIds.isEmpty()) {
-                    item(key = "spotlight_widgets_empty") {
-                        Surface(
-                            onClick = openWidgetPicker,
+                item(key = "spotlight_widgets_pager") {
+                    HorizontalPager(
+                        state = tabPagerState,
+                        userScrollEnabled = widgetTabs.size > 1 && !widgetEditMode,
+                        verticalAlignment = Alignment.Top,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { page ->
+                        val pageTab = widgetTabs.getOrNull(page) ?: return@HorizontalPager
+                        val pageWidgetIds = remember(widgetRevision, pageTab.id) {
+                            WidgetStore.spotlightItemsForTab(context, pageTab.id)
+                        }
+                        Column(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(20.dp),
-                            color = cardColor,
-                            border = BorderStroke(0.8.dp, cardBorder)
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Widgets,
-                                    contentDescription = null,
+                            if (pageWidgetIds.isEmpty()) {
+                                Surface(
+                                    onClick = openWidgetPicker,
                                     modifier = Modifier
-                                        .size(26.dp)
-                                        .gradientTint(iconBrush),
-                                    tint = Color.White
-                                )
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Widgets de pantalla completa",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = primaryTextColor
-                                    )
-                                    Text(
-                                        text = "Toca para añadir widgets a esta pestaña. Usa el lápiz para redimensionar, ajustar a bordes, reordenar o crear pestañas.",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = mutedTextColor
-                                    )
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp),
+                                    shape = RoundedCornerShape(20.dp),
+                                    color = cardColor,
+                                    border = BorderStroke(0.8.dp, cardBorder)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Widgets,
+                                            contentDescription = null,
+                                            modifier = Modifier
+                                                .size(26.dp)
+                                                .gradientTint(iconBrush),
+                                            tint = Color.White
+                                        )
+                                        Column(Modifier.weight(1f)) {
+                                            Text(
+                                                text = "Widgets de pantalla completa",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = primaryTextColor
+                                            )
+                                            Text(
+                                                text = "Toca para añadir widgets a esta pestaña. Desliza de lado para cambiar de pestaña y usa el lápiz para editar.",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = mutedTextColor
+                                            )
+                                        }
+                                        Icon(
+                                            imageVector = Icons.Filled.Add,
+                                            contentDescription = "Añadir widget",
+                                            tint = spec.primary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
                                 }
-                                Icon(
-                                    imageVector = Icons.Filled.Add,
-                                    contentDescription = "Añadir widget",
-                                    tint = spec.primary,
-                                    modifier = Modifier.size(20.dp)
-                                )
+                            } else {
+                                pageWidgetIds.forEachIndexed { index, widgetItemId ->
+                                    androidx.compose.runtime.key(widgetItemId) {
+                                        CleanWidgetBox(
+                                            itemId = widgetItemId,
+                                            editing = widgetEditMode,
+                                            accentColor = spec.primary,
+                                            barColor = spec.surface.copy(alpha = 0.94f),
+                                            barBorderColor = cardBorder,
+                                            allowHorizontalResize = true,
+                                            minHeightDp = 110,
+                                            maxHeightDp = 720,
+                                            normalHorizontalPaddingDp = 16,
+                                            allowEdgeToEdgeToggle = true,
+                                            edgeBleedDp = 0,
+                                            longPressToEdit = false,
+                                            onExitEdit = { widgetEditMode = false },
+                                            onExpandFullscreen = {
+                                                Haptics.perform(context)
+                                                fullscreenWidgetId = widgetItemId
+                                            },
+                                            onMoveUp = if (index > 0) {
+                                                {
+                                                    WidgetStore.moveSpotlightWidgetInTab(context, pageTab.id, widgetItemId, -1)
+                                                    widgetRevision++
+                                                }
+                                            } else null,
+                                            onMoveDown = if (index < pageWidgetIds.lastIndex) {
+                                                {
+                                                    WidgetStore.moveSpotlightWidgetInTab(context, pageTab.id, widgetItemId, 1)
+                                                    widgetRevision++
+                                                }
+                                            } else null,
+                                            onMoveToTab = if (widgetTabs.size > 1) {
+                                                { movingWidgetId = widgetItemId }
+                                            } else null,
+                                            onDelete = {
+                                                Haptics.perform(context)
+                                                WidgetStore.remove(context, widgetItemId)
+                                                widgetRevision++
+                                            }
+                                        )
+                                    }
+                                }
                             }
                         }
-                    }
-                } else {
-                    itemsIndexed(spotlightWidgetIds, key = { _, id -> "spotlight_widget_$id" }) { index, widgetItemId ->
-                        CleanWidgetBox(
-                            itemId = widgetItemId,
-                            editing = widgetEditMode,
-                            accentColor = spec.primary,
-                            barColor = spec.surface.copy(alpha = 0.94f),
-                            barBorderColor = cardBorder,
-                            allowHorizontalResize = true,
-                            minHeightDp = 110,
-                            maxHeightDp = 720,
-                            allowEdgeToEdgeToggle = true,
-                            edgeBleedDp = 16,
-                            longPressToEdit = false,
-                            onExitEdit = { widgetEditMode = false },
-                            onExpandFullscreen = {
-                                Haptics.perform(context)
-                                fullscreenWidgetId = widgetItemId
-                            },
-                            onMoveUp = if (index > 0) {
-                                {
-                                    WidgetStore.moveSpotlightWidgetInTab(context, selectedTabId, widgetItemId, -1)
-                                    widgetRevision++
-                                }
-                            } else null,
-                            onMoveDown = if (index < spotlightWidgetIds.lastIndex) {
-                                {
-                                    WidgetStore.moveSpotlightWidgetInTab(context, selectedTabId, widgetItemId, 1)
-                                    widgetRevision++
-                                }
-                            } else null,
-                            onMoveToTab = if (widgetTabs.size > 1) {
-                                { movingWidgetId = widgetItemId }
-                            } else null,
-                            onDelete = {
-                                Haptics.perform(context)
-                                WidgetStore.remove(context, widgetItemId)
-                                widgetRevision++
-                            }
-                        )
                     }
                 }
             } else {
@@ -841,7 +903,8 @@ fun SpotlightSearchContent(
                         },
                         onAskChatGpt = {
                             if (AiLauncher.queryChatGpt(context, query)) onCancel?.invoke()
-                        }
+                        },
+                        modifier = Modifier.padding(horizontal = 16.dp)
                     )
                 }
 
@@ -1016,9 +1079,13 @@ private fun SpotlightCard(
     cardColor: Color,
     cardBorder: Color,
     headerColor: Color,
+    modifier: Modifier = Modifier,
     content: @Composable () -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+    Column(
+        modifier = modifier.padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
         Text(
             text = title.uppercase(),
             style = MaterialTheme.typography.labelSmall,
