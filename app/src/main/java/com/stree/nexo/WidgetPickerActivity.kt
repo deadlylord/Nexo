@@ -60,7 +60,14 @@ class WidgetPickerActivity : ComponentActivity() {
                 var filter by remember { mutableStateOf("") }
                 Surface(Modifier.fillMaxSize()) {
                     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(16.dp)) {
-                        Text(if (itemId.startsWith("panel-widget:")) "Añadir al panel Widgets" else "Widget al deslizar arriba", style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            when {
+                                itemId.startsWith("spotlight-widget:") -> "Añadir widget al panel Spotlight"
+                                itemId.startsWith("panel-widget:") -> "Añadir al panel Widgets"
+                                else -> "Widget al deslizar arriba"
+                            },
+                            style = MaterialTheme.typography.titleLarge
+                        )
                         Text("Elige un widget. Android puede pedir autorización y configuración.")
                         TextButton(onClick = { openSystemPicker() }) { Text("Usar selector del teléfono") }
                         OutlinedTextField(filter, { filter = it }, label = { Text("Buscar widget o aplicación") }, modifier = Modifier.fillMaxWidth())
@@ -85,7 +92,7 @@ class WidgetPickerActivity : ComponentActivity() {
 
     private fun openSystemPicker() {
         if (pendingId != -1) return
-        if (!itemId.startsWith("panel-widget:") && !android.provider.Settings.canDrawOverlays(this)) {
+        if (!WidgetStore.isEmbeddedPanelWidget(itemId) && !android.provider.Settings.canDrawOverlays(this)) {
             runCatching { startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                 android.net.Uri.parse("package:$packageName"))) }
             return
@@ -140,7 +147,7 @@ class WidgetPickerActivity : ComponentActivity() {
     }
 
     private fun select(provider: AppWidgetProviderInfo) {
-        if (!itemId.startsWith("panel-widget:") && !android.provider.Settings.canDrawOverlays(this)) {
+        if (!WidgetStore.isEmbeddedPanelWidget(itemId) && !android.provider.Settings.canDrawOverlays(this)) {
             runCatching { startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                 android.net.Uri.parse("package:$packageName"))) }
             Toast.makeText(this, "Permite la superposición y vuelve a elegir el widget", Toast.LENGTH_LONG).show()
@@ -170,11 +177,21 @@ class WidgetPickerActivity : ComponentActivity() {
         val old = WidgetStore.get(this, itemId)
         if (old != null) runCatching { WidgetStore.host(this).deleteAppWidgetId(old.id) }
         val density = resources.displayMetrics.density
+        val defaultWidth = if (itemId.startsWith("spotlight-widget:")) {
+            (resources.displayMetrics.widthPixels / density - 32).toInt().coerceAtLeast(280)
+        } else {
+            (info.minWidth / density + 24).toInt().coerceIn(160, 360)
+        }
+        val defaultHeight = if (itemId.startsWith("spotlight-widget:")) {
+            (info.minHeight / density + 24).toInt().coerceIn(140, 520)
+        } else {
+            (info.minHeight / density + 24).toInt().coerceIn(120, 440)
+        }
         WidgetStore.put(this, itemId, WidgetBinding(pendingId,
-            old?.width ?: (info.minWidth / density + 24).toInt().coerceIn(160, 360),
-            old?.height ?: (info.minHeight / density + 24).toInt().coerceIn(120, 440)))
+            old?.width ?: defaultWidth,
+            old?.height ?: defaultHeight))
         pendingId = -1
-        if (!itemId.startsWith("panel-widget:")) EdgePanelService.showWidget(this, itemId)
+        if (!WidgetStore.isEmbeddedPanelWidget(itemId)) EdgePanelService.showWidget(this, itemId)
         finish()
     }
 

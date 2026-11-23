@@ -1,15 +1,23 @@
 package com.stree.nexo.ui
 
+import android.app.Activity
+import android.appwidget.AppWidgetManager
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.util.SizeF
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -22,16 +30,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PictureInPictureAlt
@@ -40,6 +52,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.ViewSidebar
+import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -49,8 +62,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -59,11 +74,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -71,9 +92,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.stree.nexo.ActivatorControlsActivity
 import com.stree.nexo.QuickClipActivity
 import com.stree.nexo.SearchActivity
+import com.stree.nexo.WidgetPickerActivity
 import com.stree.nexo.data.ClipboardHistoryStore
 import com.stree.nexo.data.Haptics
 import com.stree.nexo.data.ItemType
@@ -82,9 +108,11 @@ import com.stree.nexo.data.SearchItem
 import com.stree.nexo.data.SearchUiState
 import com.stree.nexo.search.ItemLauncher
 import com.stree.nexo.ui.theme.visualSpec
+import com.stree.nexo.widget.WidgetStore
 import kotlinx.coroutines.delay
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.util.UUID
 
 /**
  * Búsqueda estilo Spotlight de iPhone integrada con la estética y temas de Nexo.
@@ -107,6 +135,8 @@ fun SpotlightSearchContent(
     header: (@Composable () -> Unit)? = null
 ) {
     val context = LocalContext.current
+    val owner = LocalLifecycleOwner.current
+    val focusManager = LocalFocusManager.current
     val style = remember(Prefs.themeRevision) { Prefs.panelStyle(context) }
     val light = remember(Prefs.themeRevision) { !overlayStyle && Prefs.panelLightBackground(context) }
     val spec = remember(style, light) { style.visualSpec(light = light) }
@@ -114,12 +144,59 @@ fun SpotlightSearchContent(
 
     val focusRequester = remember { FocusRequester() }
     var actionItem by remember { mutableStateOf<SearchItem?>(null) }
+    var widgetRevision by remember { mutableIntStateOf(0) }
+    var fullscreenWidgetId by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(autoFocus) {
-        if (autoFocus) {
+    DisposableEffect(owner) {
+        var listening = false
+        fun update() {
+            if (owner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                if (!listening) listening = runCatching { WidgetStore.startListening(context); true }.getOrDefault(false)
+            } else if (listening) {
+                WidgetStore.stopListening(context)
+                listening = false
+            }
+        }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) widgetRevision++
+            update()
+        }
+        owner.lifecycle.addObserver(observer)
+        update()
+        onDispose {
+            owner.lifecycle.removeObserver(observer)
+            if (listening) WidgetStore.stopListening(context)
+        }
+    }
+
+    val spotlightWidgetIds = remember(widgetRevision) { WidgetStore.spotlightItems(context) }
+    LaunchedEffect(spotlightWidgetIds, fullscreenWidgetId) {
+        if (fullscreenWidgetId != null && fullscreenWidgetId !in spotlightWidgetIds) {
+            fullscreenWidgetId = null
+        }
+    }
+
+    LaunchedEffect(autoFocus, fullscreenWidgetId) {
+        if (fullscreenWidgetId != null) {
+            focusManager.clearFocus()
+        } else if (autoFocus) {
             delay(110)
             runCatching { focusRequester.requestFocus() }
         }
+    }
+
+    BackHandler(enabled = fullscreenWidgetId != null) {
+        fullscreenWidgetId = null
+    }
+
+    val openWidgetPicker: () -> Unit = {
+        Haptics.perform(context)
+        val intent = Intent(context, WidgetPickerActivity::class.java)
+            .putExtra("item_id", "spotlight-widget:${System.currentTimeMillis()}:${UUID.randomUUID()}")
+        if (context !is Activity) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { context.startActivity(intent) }
     }
 
     val query = state.query.trim()
@@ -185,6 +262,25 @@ fun SpotlightSearchContent(
             }
             onCancel?.invoke()
         }
+    }
+
+    val activeFullscreenId = fullscreenWidgetId
+    if (activeFullscreenId != null) {
+        FullscreenSpotlightWidget(
+            itemId = activeFullscreenId,
+            cardColor = cardColor,
+            cardBorder = cardBorder,
+            primaryTextColor = primaryTextColor,
+            accentColor = spec.primary,
+            onExitFullscreen = { fullscreenWidgetId = null },
+            onDelete = {
+                WidgetStore.remove(context, activeFullscreenId)
+                fullscreenWidgetId = null
+                widgetRevision++
+            },
+            modifier = modifier
+        )
+        return
     }
 
     Column(modifier = modifier.imePadding()) {
@@ -466,6 +562,116 @@ fun SpotlightSearchContent(
                                 }
                             }
                         }
+                    }
+                }
+
+                // 3. Widgets de pantalla completa en el panel estilo iPhone
+                item(key = "spotlight_widgets_header") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 6.dp, end = 2.dp, top = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "WIDGETS",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = mutedTextColor.copy(alpha = 0.85f),
+                            letterSpacing = 0.7.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Surface(
+                            onClick = openWidgetPicker,
+                            shape = RoundedCornerShape(12.dp),
+                            color = spec.primary.copy(alpha = 0.16f),
+                            border = BorderStroke(0.8.dp, spec.primary.copy(alpha = 0.35f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Add,
+                                    contentDescription = "Añadir widget",
+                                    tint = spec.primary,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    text = "Añadir",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = spec.primary
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (spotlightWidgetIds.isEmpty()) {
+                    item(key = "spotlight_widgets_empty") {
+                        Surface(
+                            onClick = openWidgetPicker,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(20.dp),
+                            color = cardColor,
+                            border = BorderStroke(0.8.dp, cardBorder)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Widgets,
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .size(26.dp)
+                                        .gradientTint(iconBrush),
+                                    tint = Color.White
+                                )
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Widgets de pantalla completa",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = primaryTextColor
+                                    )
+                                    Text(
+                                        text = "Toca para añadir widgets a lo ancho o expandirlos a pantalla completa.",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = mutedTextColor
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.Filled.Add,
+                                    contentDescription = "Añadir widget",
+                                    tint = spec.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    items(spotlightWidgetIds, key = { "spotlight_widget_$it" }) { widgetItemId ->
+                        SpotlightWidgetCard(
+                            itemId = widgetItemId,
+                            cardColor = cardColor,
+                            cardBorder = cardBorder,
+                            primaryTextColor = primaryTextColor,
+                            mutedTextColor = mutedTextColor,
+                            accentColor = spec.primary,
+                            onExpandFullscreen = {
+                                Haptics.perform(context)
+                                fullscreenWidgetId = widgetItemId
+                            },
+                            onDelete = {
+                                Haptics.perform(context)
+                                WidgetStore.remove(context, widgetItemId)
+                                widgetRevision++
+                            }
+                        )
                     }
                 }
             } else {
@@ -916,3 +1122,270 @@ private fun evaluateSimpleMath(input: String): String? {
             .toPlainString()
     }.getOrNull()
 }
+
+@Composable
+private fun SpotlightWidgetCard(
+    itemId: String,
+    cardColor: Color,
+    cardBorder: Color,
+    primaryTextColor: Color,
+    mutedTextColor: Color,
+    accentColor: Color,
+    onExpandFullscreen: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val context = LocalContext.current
+    val density = LocalDensity.current.density
+    var binding by remember(itemId) { mutableStateOf(WidgetStore.get(context, itemId)) }
+    val current = binding ?: return
+    val info = remember(current.id) { AppWidgetManager.getInstance(context).getAppWidgetInfo(current.id) }
+    var resizing by remember { mutableStateOf(false) }
+    var cornerPosition by remember { mutableStateOf(Offset.Zero) }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = cardColor,
+        border = BorderStroke(0.8.dp, cardBorder)
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 14.dp, end = 6.dp, top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = info?.loadLabel(context.packageManager)?.toString() ?: "Widget no disponible",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = primaryTextColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (info != null) {
+                    IconButton(
+                        onClick = onExpandFullscreen,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Fullscreen,
+                            contentDescription = "Pantalla completa",
+                            tint = accentColor,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Eliminar widget",
+                        tint = mutedTextColor,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
+            }
+
+            if (info != null) {
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 8.dp, end = 8.dp, bottom = 8.dp)
+                ) {
+                    val fullWidth = maxWidth.value.toInt().coerceAtLeast(120)
+                    val height = current.height.coerceIn(120, 720)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(height.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                    ) {
+                        AndroidView(
+                            factory = { WidgetStore.host(it).createView(it, current.id, info) },
+                            modifier = Modifier.fillMaxSize(),
+                            update = { view ->
+                                if (!resizing) {
+                                    if (Build.VERSION.SDK_INT >= 31) {
+                                        view.updateAppWidgetSize(
+                                            Bundle(),
+                                            listOf(SizeF(fullWidth.toFloat(), height.toFloat()))
+                                        )
+                                    } else {
+                                        @Suppress("DEPRECATION")
+                                        view.updateAppWidgetSize(null, fullWidth, height, fullWidth, height)
+                                    }
+                                }
+                            }
+                        )
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .size(30.dp)
+                                .onGloballyPositioned { cornerPosition = it.positionInRoot() }
+                                .pointerInput(current.id, fullWidth) {
+                                    var startPointer = Offset.Zero
+                                    var startHeight = 0
+                                    detectDragGestures(
+                                        onDragStart = {
+                                            startPointer = cornerPosition + it
+                                            startHeight = binding?.height?.coerceIn(120, 720) ?: height
+                                            resizing = true
+                                        },
+                                        onDrag = { change, _ ->
+                                            change.consume()
+                                            val movement = cornerPosition + change.position - startPointer
+                                            binding = binding?.copy(
+                                                width = fullWidth,
+                                                height = (startHeight + movement.y / density).toInt().coerceIn(120, 720)
+                                            )
+                                        },
+                                        onDragEnd = {
+                                            resizing = false
+                                            binding?.let { WidgetStore.put(context, itemId, it) }
+                                        },
+                                        onDragCancel = {
+                                            resizing = false
+                                            binding?.let { WidgetStore.put(context, itemId, it) }
+                                        }
+                                    )
+                                },
+                            color = accentColor.copy(alpha = 0.22f),
+                            shape = RoundedCornerShape(topStart = 10.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text("◢", color = accentColor, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FullscreenSpotlightWidget(
+    itemId: String,
+    cardColor: Color,
+    cardBorder: Color,
+    primaryTextColor: Color,
+    accentColor: Color,
+    onExitFullscreen: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val binding = remember(itemId) { WidgetStore.get(context, itemId) }
+    val info = remember(binding?.id) {
+        binding?.let { AppWidgetManager.getInstance(context).getAppWidgetInfo(it.id) }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            color = cardColor,
+            border = BorderStroke(0.8.dp, cardBorder)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = info?.loadLabel(context.packageManager)?.toString() ?: "Widget",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = primaryTextColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(
+                    onClick = onExitFullscreen,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.FullscreenExit,
+                        contentDescription = "Salir de pantalla completa",
+                        tint = accentColor,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = "Salir",
+                        color = accentColor,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Eliminar widget",
+                        tint = primaryTextColor.copy(alpha = 0.75f),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+
+        Surface(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            color = cardColor,
+            border = BorderStroke(0.8.dp, cardBorder)
+        ) {
+            if (binding != null && info != null) {
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(8.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                ) {
+                    val width = maxWidth.value.toInt().coerceAtLeast(160)
+                    val height = maxHeight.value.toInt().coerceAtLeast(160)
+                    AndroidView(
+                        factory = { WidgetStore.host(it).createView(it, binding.id, info) },
+                        modifier = Modifier.fillMaxSize(),
+                        update = { view ->
+                            if (Build.VERSION.SDK_INT >= 31) {
+                                view.updateAppWidgetSize(
+                                    Bundle(),
+                                    listOf(SizeF(width.toFloat(), height.toFloat()))
+                                )
+                            } else {
+                                @Suppress("DEPRECATION")
+                                view.updateAppWidgetSize(null, width, height, width, height)
+                            }
+                        }
+                    )
+                }
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "Widget no disponible",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = primaryTextColor
+                    )
+                }
+            }
+        }
+    }
+}
+

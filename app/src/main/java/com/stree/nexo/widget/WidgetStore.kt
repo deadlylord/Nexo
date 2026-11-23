@@ -24,8 +24,17 @@ object WidgetStore {
         if (listeners == 0) runCatching { host(context).stopListening() }
     }
 
+    private const val PANEL_PREFIX = "panel-widget:"
+    private const val SPOTLIGHT_PREFIX = "spotlight-widget:"
+
+    fun isEmbeddedPanelWidget(item: String): Boolean =
+        item.startsWith(PANEL_PREFIX) || item.startsWith(SPOTLIGHT_PREFIX)
+
     fun panelItems(context: Context): List<String> = prefs(context).all.keys
-        .filter { it.startsWith("panel-widget:") }.sorted()
+        .filter { it.startsWith(PANEL_PREFIX) }.sorted()
+
+    fun spotlightItems(context: Context): List<String> = prefs(context).all.keys
+        .filter { it.startsWith(SPOTLIGHT_PREFIX) }.sorted()
 
     fun get(context: Context, item: String): WidgetBinding? = runCatching {
         val json = JSONObject(prefs(context).getString(item, null) ?: return null)
