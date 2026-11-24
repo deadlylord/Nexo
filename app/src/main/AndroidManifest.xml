@@ -137,6 +137,14 @@
             android:noHistory="true"
             android:theme="@android:style/Theme.NoDisplay" />
 
+        <activity
+            android:name=".FloatingWindowMenuActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.stree.nexo.floating"
+            android:theme="@style/Theme.Nexo.Panel" />
+
         <activity android:name=".WidgetPickerActivity"
             android:exported="false" android:excludeFromRecents="true" />
 

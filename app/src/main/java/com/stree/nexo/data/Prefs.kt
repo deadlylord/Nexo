@@ -462,4 +462,11 @@ object Prefs {
     fun setAutoOpenOnUnlockSpotlight(context: Context, spotlight: Boolean) {
         prefs(context).edit().putBoolean("auto_open_on_unlock_spotlight", spotlight).apply()
     }
+
+    fun floatingBubbleEnabled(context: Context): Boolean =
+        prefs(context).getBoolean("floating_bubble_enabled", true)
+
+    fun setFloatingBubbleEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("floating_bubble_enabled", enabled).apply()
+    }
 }

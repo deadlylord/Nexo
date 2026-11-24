@@ -53,14 +53,61 @@ object ItemLauncher {
     fun launchFloating(context: Context, item: SearchItem): Boolean = runCatching {
         if (!canOpenFloating(item)) return false
         val intent = intentFor(context, item) ?: return false
-        launchIntentFloating(context, intent)
+        val pkg = item.packageName ?: intent.`package` ?: intent.component?.packageName
+        val bounds = defaultFloatingBounds(context)
+        val launched = launchIntentFloating(context, intent, bounds)
+        if (launched && !pkg.isNullOrBlank()) {
+            com.stree.nexo.floating.FloatingWindowRegistry.registerLaunched(context, pkg, bounds)
+        }
+        launched
     }.getOrDefault(false)
 
     /** Abre una aplicación por paquete en ventana flotante (freeform). */
-    fun launchPackageFloating(context: Context, packageName: String?): Boolean {
+    fun launchPackageFloating(context: Context, packageName: String?): Boolean =
+        launchPackageFloatingInBounds(context, packageName, bounds = null, registerInDock = true)
+
+    /** Abre o reposiciona una aplicación en ventana flotante dentro de [bounds] específicos. */
+    fun launchPackageFloatingInBounds(
+        context: Context,
+        packageName: String?,
+        bounds: Rect? = null,
+        registerInDock: Boolean = true
+    ): Boolean {
         if (packageName.isNullOrBlank()) return false
         val intent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return false
-        return launchIntentFloating(context, intent)
+        val resolved = bounds ?: defaultFloatingBounds(context)
+        val launched = launchIntentFloating(context, intent, resolved)
+        if (launched && registerInDock) {
+            com.stree.nexo.floating.FloatingWindowRegistry.registerLaunched(context, packageName, resolved)
+        }
+        return launched
+    }
+
+    /** Abre la aplicación en pantalla completa normal (maximizar desde ventana flotante). */
+    fun launchPackageFullscreen(context: Context, packageName: String?): Boolean {
+        if (packageName.isNullOrBlank()) return false
+        val intent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return false
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        val options = ActivityOptions.makeBasic()
+        runCatching {
+            val method = ActivityOptions::class.java.getMethod(
+                "setLaunchWindowingMode",
+                Int::class.javaPrimitiveType
+            )
+            method.invoke(options, WINDOWING_MODE_FULLSCREEN)
+        }
+        val bundle = options.toBundle().apply {
+            putInt(EXTRA_LAUNCH_WINDOWING_MODE, WINDOWING_MODE_FULLSCREEN)
+        }
+        return runCatching {
+            context.startActivity(intent, bundle)
+            true
+        }.getOrElse {
+            runCatching {
+                context.startActivity(intent)
+                true
+            }.getOrDefault(false)
+        }
     }
 
     /**
@@ -72,16 +119,24 @@ object ItemLauncher {
         packageName: String,
         contentIntent: android.app.PendingIntent?
     ): Boolean {
+        val defaultBounds = defaultFloatingBounds(context)
         if (contentIntent != null) {
             val sentFloating = runCatching {
-                val options = buildFloatingOptions(context, allowBackgroundPendingIntent = true)
+                val options = buildFloatingOptions(
+                    context = context,
+                    customBounds = defaultBounds,
+                    allowBackgroundPendingIntent = true
+                )
                 contentIntent.send(context, 0, null, null, null, null, options)
                 true
             }.getOrDefault(false)
-            if (sentFloating) return true
+            if (sentFloating) {
+                com.stree.nexo.floating.FloatingWindowRegistry.registerLaunched(context, packageName, defaultBounds)
+                return true
+            }
         }
 
-        if (launchPackageFloating(context, packageName)) return true
+        if (launchPackageFloatingInBounds(context, packageName, defaultBounds, registerInDock = true)) return true
 
         if (contentIntent != null) {
             val sentNormal = runCatching {
@@ -103,28 +158,45 @@ object ItemLauncher {
         return launchApp(context, packageName)
     }
 
-    private fun launchIntentFloating(context: Context, rawIntent: Intent): Boolean = runCatching {
+    private fun launchIntentFloating(
+        context: Context,
+        rawIntent: Intent,
+        customBounds: Rect? = null
+    ): Boolean = runCatching {
         val intent = Intent(rawIntent)
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         // Sin MULTIPLE_TASK el sistema reutiliza la tarea existente (en pantalla
         // completa) y se ignora el tamaño de ventana.
         intent.addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
-        context.startActivity(intent, buildFloatingOptions(context))
+        context.startActivity(
+            intent,
+            buildFloatingOptions(
+                context = context,
+                customBounds = customBounds,
+                allowBackgroundPendingIntent = true
+            )
+        )
         true
     }.getOrDefault(false)
 
-    private fun buildFloatingOptions(
-        context: Context,
-        allowBackgroundPendingIntent: Boolean = false
-    ): android.os.Bundle {
+    private fun defaultFloatingBounds(context: Context): Rect {
         val metrics = context.resources.displayMetrics
         val width = (metrics.widthPixels * 0.84f).toInt()
         val height = (metrics.heightPixels * 0.62f).toInt()
         val left = (metrics.widthPixels - width) / 2
         val top = (metrics.heightPixels * 0.18f).toInt()
+        return Rect(left, top, left + width, top + height)
+    }
+
+    private fun buildFloatingOptions(
+        context: Context,
+        customBounds: Rect? = null,
+        allowBackgroundPendingIntent: Boolean = false
+    ): android.os.Bundle {
+        val bounds = customBounds ?: defaultFloatingBounds(context)
 
         val options = ActivityOptions.makeBasic()
-        options.setLaunchBounds(Rect(left, top, left + width, top + height))
+        options.setLaunchBounds(bounds)
 
         // setLaunchWindowingMode() es @TestApi: no está en el SDK público, pero
         // existe en el framework. Se intenta por reflexión.
@@ -210,6 +282,7 @@ object ItemLauncher {
 
     private const val EXTRA_LAUNCH_WINDOWING_MODE = "android.activity.windowingMode"
 
-    /** WindowConfiguration.WINDOWING_MODE_FREEFORM (oculto en el SDK público). */
+    /** WindowConfiguration.WINDOWING_MODE_FULLSCREEN / FREEFORM (ocultos en el SDK público). */
+    private const val WINDOWING_MODE_FULLSCREEN = 1
     private const val WINDOWING_MODE_FREEFORM = 5
 }

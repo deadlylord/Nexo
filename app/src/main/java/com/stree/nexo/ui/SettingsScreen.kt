@@ -783,6 +783,49 @@ private fun PanelHeroCard(
                 }
             }
 
+            Spacer(Modifier.height(10.dp))
+
+            // Burbuja y menú profesional de ventanas flotantes
+            var floatingBubbleEnabled by remember { mutableStateOf(Prefs.floatingBubbleEnabled(context)) }
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "Burbuja y menú flotante",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Minimiza apps flotantes en burbuja y acopla varias ventanas en layouts",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = floatingBubbleEnabled,
+                        onCheckedChange = { enabled ->
+                            Haptics.perform(context)
+                            floatingBubbleEnabled = enabled
+                            Prefs.setFloatingBubbleEnabled(context, enabled)
+                            if (!enabled) {
+                                com.stree.nexo.floating.FloatingWindowRegistry.clearAll(context)
+                            } else {
+                                EdgePanelService.syncFloatingBubble(context)
+                            }
+                        }
+                    )
+                }
+            }
+
             Spacer(Modifier.height(12.dp))
 
             // Estado de permisos clave del servicio en segundo plano

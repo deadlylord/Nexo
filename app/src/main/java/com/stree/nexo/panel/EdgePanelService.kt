@@ -47,6 +47,7 @@ import com.stree.nexo.MainActivity
 import com.stree.nexo.QuickClipActivity
 import com.stree.nexo.R
 import com.stree.nexo.SearchActivity
+import com.stree.nexo.FloatingWindowMenuActivity
 import com.stree.nexo.SpotlightSearchActivity
 import com.stree.nexo.data.CallPulse
 import com.stree.nexo.data.ClipboardHistoryStore
@@ -59,6 +60,8 @@ import com.stree.nexo.data.PanelSide
 import com.stree.nexo.data.Prefs
 import com.stree.nexo.data.PreviousAppTarget
 import com.stree.nexo.data.UsageStore
+import com.stree.nexo.floating.FloatingAppBubbleController
+import com.stree.nexo.floating.FloatingWindowRegistry
 import com.stree.nexo.media.MediaControlService
 import com.stree.nexo.media.NowPlaying
 import com.stree.nexo.search.ItemLauncher
@@ -75,6 +78,9 @@ import kotlin.math.abs
 
 class EdgePanelService : Service() {
     private val floatingWidget by lazy { com.stree.nexo.widget.FloatingWidgetController(this) }
+    private val floatingBubble by lazy {
+        FloatingAppBubbleController(this) { openFloatingWindowMenu() }
+    }
 
     private lateinit var windowManager: WindowManager
     private var handleView: EdgeHandleView? = null
@@ -409,11 +415,14 @@ class EdgePanelService : Service() {
         observeMediaPlayback()
 
         setHandleVisible(!hostUiVisible && !panelUiVisible)
+        floatingBubble.setSuppressed(hostUiVisible || panelUiVisible)
+        floatingBubble.sync()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         refreshIslandIdleState()
+        floatingBubble.sync()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -425,6 +434,11 @@ class EdgePanelService : Service() {
             addHandle()
             setupDynamicIsland()
             registerScreenshotObserver()
+            floatingBubble.sync()
+        }
+        if (intent?.action == ACTION_SYNC_BUBBLE) {
+            floatingBubble.setSuppressed(hostUiVisible || panelUiVisible)
+            floatingBubble.sync()
         }
         if (intent?.action == ACTION_WIDGET) intent.getStringExtra("item_id")?.let { id ->
             runCatching { floatingWidget.show(id) }
@@ -442,6 +456,7 @@ class EdgePanelService : Service() {
         gestureHandler.removeCallbacksAndMessages(null)
         gestureScope.cancel()
         floatingWidget.close()
+        floatingBubble.hide()
         removeDynamicIsland()
         removeHandle()
         if (instance === this) instance = null
@@ -1552,9 +1567,68 @@ class EdgePanelService : Service() {
             }
             EdgeGestureAction.TOGGLE_FLASHLIGHT -> toggleFlashlight()
             EdgeGestureAction.VOICE_ASSISTANT -> openVoiceAssistant()
+            EdgeGestureAction.MINIMIZE_TO_BUBBLE -> minimizeCurrentAppToBubble()
             EdgeGestureAction.LAUNCH_APP -> launchConfiguredApp(gesture)
             EdgeGestureAction.NONE -> Unit
         }
+    }
+
+    private fun minimizeCurrentAppToBubble() {
+        Haptics.perform(this, strong = true)
+        if (!UsageStore(this).hasUsageAccess()) {
+            val existing = FloatingWindowRegistry.entries.value.firstOrNull()
+            if (existing != null) {
+                FloatingWindowRegistry.markAllMinimized(this)
+                sendToHomeBackground()
+            } else {
+                openControls("lastapp")
+                Toast.makeText(
+                    this,
+                    "Autoriza el acceso al uso para detectar y minimizar la app actual a burbuja",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            return
+        }
+        gestureScope.launch {
+            val active = withContext(Dispatchers.IO) {
+                runCatching { LastAppNavigator.currentForegroundAppInfo(this@EdgePanelService) }.getOrNull()
+            }
+            if (active != null) {
+                FloatingWindowRegistry.registerMinimized(this@EdgePanelService, active.packageName)
+                sendToHomeBackground()
+            } else {
+                val existing = FloatingWindowRegistry.entries.value.firstOrNull()
+                if (existing != null) {
+                    FloatingWindowRegistry.markAllMinimized(this@EdgePanelService)
+                    sendToHomeBackground()
+                } else {
+                    Toast.makeText(
+                        this@EdgePanelService,
+                        "No se detectó una app activa para minimizar",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+    }
+
+    private fun sendToHomeBackground() {
+        if (!SplitScreenService.performHome()) {
+            startOverlayActivity(
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            )
+        }
+    }
+
+    private fun openFloatingWindowMenu() {
+        Haptics.perform(this)
+        startOverlayActivity(
+            Intent(this, FloatingWindowMenuActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+            }
+        )
     }
 
     private fun openLastApp() {
@@ -1816,6 +1890,7 @@ class EdgePanelService : Service() {
         private const val NOTIFICATION_ID = 42
         const val ACTION_STOP = "com.stree.nexo.action.STOP_PANEL"
         private const val ACTION_REFRESH = "com.stree.nexo.action.REFRESH_PANEL"
+        private const val ACTION_SYNC_BUBBLE = "com.stree.nexo.action.SYNC_FLOATING_BUBBLE"
         private const val ACTION_WIDGET = "com.stree.nexo.action.SHOW_WIDGET"
 
         /** Tiempo con el dedo quieto para ejecutar el gesto Jalar y sostener. */
@@ -1916,6 +1991,7 @@ class EdgePanelService : Service() {
             instance?.let { service ->
                 service.gestureHandler.post {
                     service.setHandleVisible(!hostUiVisible && !panelUiVisible)
+                    service.floatingBubble.setSuppressed(hostUiVisible || panelUiVisible)
                 }
             }
         }
@@ -1926,6 +2002,46 @@ class EdgePanelService : Service() {
             instance?.let { service ->
                 service.gestureHandler.post {
                     service.setHandleVisible(!hostUiVisible && !panelUiVisible)
+                    service.floatingBubble.setSuppressed(hostUiVisible || panelUiVisible)
+                }
+            }
+        }
+
+        fun syncFloatingBubble(context: Context) {
+            val running = instance
+            if (running != null) {
+                running.gestureHandler.post {
+                    running.floatingBubble.setSuppressed(hostUiVisible || panelUiVisible)
+                    running.floatingBubble.sync()
+                }
+                return
+            }
+            if (Prefs.floatingBubbleEnabled(context) &&
+                Settings.canDrawOverlays(context) &&
+                FloatingWindowRegistry.entries.value.isNotEmpty()
+            ) {
+                runCatching {
+                    ContextCompat.startForegroundService(
+                        context,
+                        Intent(context, EdgePanelService::class.java).setAction(ACTION_SYNC_BUBBLE)
+                    )
+                }
+            }
+        }
+
+        fun minimizeToBackground(context: Context) {
+            val running = instance
+            if (running != null) {
+                running.gestureHandler.post { running.sendToHomeBackground() }
+                return
+            }
+            if (!SplitScreenService.performHome()) {
+                runCatching {
+                    context.startActivity(
+                        Intent(Intent.ACTION_MAIN)
+                            .addCategory(Intent.CATEGORY_HOME)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
                 }
             }
         }

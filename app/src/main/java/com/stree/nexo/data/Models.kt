@@ -60,6 +60,7 @@ enum class EdgeGestureAction(val label: String, val description: String) {
     TAKE_SCREENSHOT("Tomar captura", "Guarda una captura de pantalla"),
     TOGGLE_FLASHLIGHT("Linterna", "Enciende o apaga el flash"),
     VOICE_ASSISTANT("Asistente de voz", "Abre ChatGPT Voz / Live"),
+    MINIMIZE_TO_BUBBLE("Minimizar a burbuja", "Convierte la app actual en una burbuja flotante"),
     LAUNCH_APP("Abrir una app…", "Lanza la aplicación que elijas"),
     NONE("Desactivado", "No hace nada con este gesto")
 }
