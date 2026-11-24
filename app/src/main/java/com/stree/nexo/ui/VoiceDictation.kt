@@ -37,6 +37,10 @@ class NexoDictationState internal constructor() {
     internal var startAction: () -> Unit = {}
     internal var stopAction: () -> Unit = {}
 
+    fun start() {
+        if (!listening) startAction()
+    }
+
     fun toggle() = if (listening) stopAction() else startAction()
     fun stop() = stopAction()
 }

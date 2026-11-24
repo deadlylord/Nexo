@@ -323,18 +323,13 @@ class FloatingAppBubbleController(
 
     private fun handleBubbleTap() {
         Haptics.perform(context)
-        val entries = FloatingWindowRegistry.entries.value
-        val single = entries.singleOrNull()
-        if (single != null && single.minimized) {
-            ItemLauncher.launchPackageFloatingInBounds(
-                context = context,
-                packageName = single.packageName,
-                bounds = single.lastBounds,
-                registerInDock = true
-            )
-        } else {
-            onOpenMenu()
-        }
+        val top = FloatingWindowRegistry.entries.value.firstOrNull() ?: return
+        ItemLauncher.launchPackageFloatingInBounds(
+            context = context,
+            packageName = top.packageName,
+            bounds = top.lastBounds,
+            registerInDock = true
+        )
     }
 
     private fun snapToEdge(root: FrameLayout, params: WindowManager.LayoutParams) {

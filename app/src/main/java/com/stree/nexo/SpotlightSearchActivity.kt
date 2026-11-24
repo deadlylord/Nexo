@@ -151,8 +151,19 @@ class SpotlightSearchActivity : ComponentActivity() {
                                     dismiss()
                                 },
                                 autoFocus = true,
+                                autoListen = true,
                                 overlayStyle = true,
                                 onCancel = dismiss,
+                                onOpenFloatingMenu = {
+                                    startActivity(
+                                        Intent(this@SpotlightSearchActivity, FloatingWindowMenuActivity::class.java).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                                            addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                                        }
+                                    )
+                                    dismiss()
+                                },
                                 onOpenGestureSettings = {
                                     startActivity(
                                         Intent(this@SpotlightSearchActivity, MainActivity::class.java).apply {

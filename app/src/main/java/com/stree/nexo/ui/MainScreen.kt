@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddToHomeScreen
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
@@ -53,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.stree.nexo.FloatingWindowMenuActivity
 import com.stree.nexo.R
 import com.stree.nexo.SpotlightShortcutActivity
 import com.stree.nexo.data.Haptics
@@ -236,6 +238,28 @@ fun MainScreen(
                                     }
                                 }
                                 IconButton(
+                                    onClick = {
+                                        Haptics.perform(context)
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent(context, FloatingWindowMenuActivity::class.java).apply {
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                                                    addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                                                }
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier.size(34.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.PictureInPictureAlt,
+                                        contentDescription = "Menú de ventanas flotantes",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                IconButton(
                                     onClick = pinSpotlightShortcut,
                                     modifier = Modifier.size(34.dp)
                                 ) {
@@ -257,6 +281,8 @@ fun MainScreen(
                             onItemClick = onItemClick,
                             onTogglePin = onTogglePin,
                             onOpenFloating = onOpenFloating,
+                            autoListen = true,
+                            autoListenKey = spotlightRequest,
                             onOpenGestureSettings = {
                                 settingsSection = SettingsSectionFilter.GESTURES
                                 tab = MainTab.SETTINGS

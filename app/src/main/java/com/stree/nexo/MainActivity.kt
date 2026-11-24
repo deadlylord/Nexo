@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
     private var hapticsState by mutableStateOf(true)
     private var settingsRequest by mutableStateOf(0)
     private var spotlightRequest by mutableStateOf(0)
+    private var stoppedInBackground = false
 
     private val contactsPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -140,11 +141,23 @@ class MainActivity : ComponentActivity() {
         syncFromPreferences()
         viewModel.refresh()
 
+        if (stoppedInBackground) {
+            stoppedInBackground = false
+            if (!intent.getBooleanExtra("open_settings", false)) {
+                spotlightRequest++
+            }
+        }
+
         if (panelEnabledState) {
             startPanelService()
         }
         EdgePanelService.setHandleVisible(false)
         consumePanelCall()
+    }
+
+    override fun onStop() {
+        stoppedInBackground = true
+        super.onStop()
     }
 
     override fun onNewIntent(intent: Intent) {

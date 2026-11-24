@@ -133,8 +133,11 @@ fun SpotlightSearchContent(
     onOpenFloating: (SearchItem) -> Unit,
     modifier: Modifier = Modifier,
     autoFocus: Boolean = false,
+    autoListen: Boolean = false,
+    autoListenKey: Any = Unit,
     overlayStyle: Boolean = false,
     onCancel: (() -> Unit)? = null,
+    onOpenFloatingMenu: (() -> Unit)? = null,
     onOpenGestureSettings: (() -> Unit)? = null,
     onPinSpotlightShortcut: (() -> Unit)? = null,
     header: (@Composable () -> Unit)? = null
@@ -240,6 +243,13 @@ fun SpotlightSearchContent(
         } else if (autoFocus) {
             delay(110)
             runCatching { focusRequester.requestFocus() }
+        }
+    }
+
+    LaunchedEffect(autoListen, autoListenKey) {
+        if (autoListen && fullscreenWidgetId == null) {
+            delay(220)
+            dictation.start()
         }
     }
 
@@ -465,6 +475,28 @@ fun SpotlightSearchContent(
                         activeColor = spec.primary,
                         size = 32.dp
                     )
+                }
+            }
+
+            if (onOpenFloatingMenu != null) {
+                Surface(
+                    onClick = {
+                        Haptics.perform(context)
+                        onOpenFloatingMenu()
+                    },
+                    shape = CircleShape,
+                    color = searchPillBg,
+                    border = BorderStroke(0.8.dp, cardBorder),
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Filled.PictureInPictureAlt,
+                            contentDescription = "Menú de ventanas flotantes",
+                            tint = spec.primary,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
                 }
             }
 

@@ -1739,6 +1739,33 @@ fun SearchPanel(
                                     onTogglePlayPause = togglePlayPause,
                                     onOpenMusicApp = openPlayingMusicApp,
                                     onSkipNext = skipNextTrack,
+                                    onOpenSpotlight = {
+                                        Haptics.perform(context)
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent(context, com.stree.nexo.SpotlightSearchActivity::class.java).apply {
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                                                    addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                                                }
+                                            )
+                                        }
+                                        dismissPanel()
+                                    },
+                                    onOpenControls = {
+                                        Haptics.perform(context)
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent(context, com.stree.nexo.ActivatorControlsActivity::class.java).apply {
+                                                    putExtra("control", "brightness")
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                                                    addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                                                }
+                                            )
+                                        }
+                                        dismissPanel()
+                                    },
                                     onClearQuery = { onQueryChange("") },
                                     onToggleKeyboard = toggleKeyboard,
                                     onOpenSettings = onOpenSettings
@@ -1849,6 +1876,8 @@ private fun PanelFooter(
     onTogglePlayPause: () -> Unit,
     onOpenMusicApp: () -> Unit,
     onSkipNext: () -> Unit,
+    onOpenSpotlight: () -> Unit,
+    onOpenControls: () -> Unit,
     onClearQuery: () -> Unit,
     onToggleKeyboard: () -> Unit,
     onOpenSettings: () -> Unit
@@ -1865,7 +1894,7 @@ private fun PanelFooter(
         Box(
             modifier = Modifier
                 .weight(1f)
-                .height(48.dp)
+                .height(44.dp)
                 .clip(RoundedCornerShape(14.dp))
                 .combinedClickable(
                     role = Role.Button,
@@ -1877,7 +1906,7 @@ private fun PanelFooter(
         ) {
             Box(
                 modifier = Modifier
-                    .size(34.dp)
+                    .size(32.dp)
                     .clip(CircleShape)
                     .background(if (isPlaying) activePillColor else Color.Transparent),
                 contentAlignment = Alignment.Center
@@ -1894,7 +1923,7 @@ private fun PanelFooter(
                         imageVector = if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                         contentDescription = if (playing) "Pausar música" else "Reproducir música",
                         modifier = Modifier
-                            .size(21.dp)
+                            .size(20.dp)
                             .gradientTint(iconBrush),
                         tint = Color.White
                     )
@@ -1904,13 +1933,47 @@ private fun PanelFooter(
 
         IconButton(
             onClick = onSkipNext,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .weight(1f)
+                .height(44.dp)
         ) {
             Icon(
                 imageVector = Icons.Filled.SkipNext,
                 contentDescription = "Siguiente canción",
                 modifier = Modifier
-                    .size(22.dp)
+                    .size(20.dp)
+                    .gradientTint(iconBrush),
+                tint = Color.White
+            )
+        }
+
+        IconButton(
+            onClick = onOpenSpotlight,
+            modifier = Modifier
+                .weight(1f)
+                .height(44.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Search,
+                contentDescription = "Abrir Spotlight",
+                modifier = Modifier
+                    .size(20.dp)
+                    .gradientTint(iconBrush),
+                tint = Color.White
+            )
+        }
+
+        IconButton(
+            onClick = onOpenControls,
+            modifier = Modifier
+                .weight(1f)
+                .height(44.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Brightness6,
+                contentDescription = "Brillo y controles rápidos",
+                modifier = Modifier
+                    .size(19.dp)
                     .gradientTint(iconBrush),
                 tint = Color.White
             )
@@ -1921,11 +1984,13 @@ private fun PanelFooter(
                 Haptics.perform(context)
                 if (hasQuery) onClearQuery() else onToggleKeyboard()
             },
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .weight(1f)
+                .height(44.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .size(34.dp)
+                    .size(32.dp)
                     .clip(CircleShape)
                     .background(if (hasQuery || imeOpen) activePillColor else Color.Transparent),
                 contentAlignment = Alignment.Center
@@ -1951,7 +2016,7 @@ private fun PanelFooter(
                             imageVector = Icons.Filled.Close,
                             contentDescription = "Borrar búsqueda",
                             modifier = Modifier
-                                .size(20.dp)
+                                .size(19.dp)
                                 .gradientTint(iconBrush),
                             tint = Color.White
                         )
@@ -1960,7 +2025,7 @@ private fun PanelFooter(
                             painter = painterResource(R.drawable.ic_keyboard),
                             contentDescription = if (imeOpen) "Ocultar teclado" else "Mostrar teclado",
                             modifier = Modifier
-                                .size(20.dp)
+                                .size(19.dp)
                                 .gradientTint(iconBrush),
                             tint = Color.White
                         )
@@ -1974,13 +2039,15 @@ private fun PanelFooter(
                 Haptics.perform(context)
                 onOpenSettings()
             },
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .weight(1f)
+                .height(44.dp)
         ) {
             Icon(
                 imageVector = Icons.Filled.Settings,
                 contentDescription = "Abrir ajustes de Nexo",
                 modifier = Modifier
-                    .size(20.dp)
+                    .size(19.dp)
                     .gradientTint(iconBrush),
                 tint = Color.White
             )
