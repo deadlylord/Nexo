@@ -64,7 +64,9 @@ import com.stree.nexo.floating.FloatingAppBubbleController
 import com.stree.nexo.floating.FloatingWindowRegistry
 import com.stree.nexo.media.MediaControlService
 import com.stree.nexo.media.NowPlaying
+import androidx.compose.ui.graphics.toArgb
 import com.stree.nexo.search.ItemLauncher
+import com.stree.nexo.ui.theme.visualSpec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -365,6 +367,13 @@ class EdgePanelService : Service() {
             override fun onDoubleTap(event: MotionEvent): Boolean {
                 doubleTapHandled = true
                 gestureHandler.removeCallbacks(holdAction)
+                val view = handleView
+                if (view != null && view.isShowingLiveAlert() && view.liveMode == EdgeLiveMode.NOTIFICATION) {
+                    Haptics.perform(this@EdgePanelService)
+                    collapseLiveAlert()
+                    showNotificationPreview()
+                    return true
+                }
                 collapseLiveAlert()
                 executeGesture(EdgeGesture.DOUBLE_TAP)
                 return true
@@ -457,6 +466,7 @@ class EdgePanelService : Service() {
         gestureScope.cancel()
         floatingWidget.close()
         floatingBubble.hide()
+        hideNotificationPreviewPopup()
         removeDynamicIsland()
         removeHandle()
         if (instance === this) instance = null
@@ -1403,6 +1413,7 @@ class EdgePanelService : Service() {
     /** Abre la última notificación recibida directamente en ventana flotante (freeform). */
     private fun openLatestNotification() {
         Haptics.perform(this)
+        hideNotificationPreviewPopup()
         val pulse = ClipboardHistoryStore.latestNotification
         if (pulse == null) {
             openPanel()
@@ -1413,6 +1424,213 @@ class EdgePanelService : Service() {
             packageName = pulse.packageName,
             contentIntent = pulse.contentIntent
         )
+    }
+
+    private var notificationPreviewView: View? = null
+    private val hideNotificationPreviewRunnable = Runnable { hideNotificationPreviewPopup() }
+
+    /**
+     * Muestra o expande una vista previa de la última notificación al dar doble toque
+     * en el botón de notificación del borde.
+     */
+    private fun showNotificationPreview() {
+        val pulse = ClipboardHistoryStore.latestNotification ?: return
+        if (islandView != null && Prefs.dynamicIslandEnabled(this)) {
+            expandLatestNotification()
+            return
+        }
+        showNotificationPreviewPopup(pulse)
+    }
+
+    private fun showNotificationPreviewPopup(pulse: NotificationPulse) {
+        hideNotificationPreviewPopup()
+        if (!Settings.canDrawOverlays(this)) return
+
+        val dm = resources.displayMetrics
+        val cardWidth = (dm.widthPixels - dp(28)).coerceIn(dp(240), dp(390))
+        val locked = isDeviceLocked()
+        val spec = Prefs.panelStyle(this).visualSpec(light = false)
+        val accent = pulse.accentColor ?: spec.primary.toArgb()
+
+        val card = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            elevation = dp(10).toFloat()
+            background = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                cornerRadius = dp(22).toFloat()
+                setColor(android.graphics.Color.argb(242, 16, 18, 28))
+                setStroke(dp(1), accent)
+            }
+            setOnClickListener { openLatestNotification() }
+        }
+
+        val headerRow = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        if (pulse.appIcon != null) {
+            val icon = android.widget.ImageView(this).apply {
+                setImageBitmap(pulse.appIcon)
+                scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                clipToOutline = true
+                outlineProvider = object : android.view.ViewOutlineProvider() {
+                    override fun getOutline(v: View, outline: android.graphics.Outline) {
+                        outline.setRoundRect(0, 0, v.width, v.height, dp(8).toFloat())
+                    }
+                }
+            }
+            headerRow.addView(icon, android.widget.LinearLayout.LayoutParams(dp(26), dp(26)).apply {
+                marginEnd = dp(8)
+            })
+        }
+
+        val appTitle = android.widget.TextView(this).apply {
+            text = pulse.appName
+            textSize = 12f
+            setTypeface(android.graphics.Typeface.DEFAULT_BOLD)
+            setTextColor(accent)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        headerRow.addView(appTitle, android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+        val closeBtn = android.widget.TextView(this).apply {
+            text = "✕"
+            textSize = 13f
+            setTextColor(android.graphics.Color.argb(190, 255, 255, 255))
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(4), dp(4), dp(4))
+            setOnClickListener {
+                Haptics.perform(this@EdgePanelService)
+                hideNotificationPreviewPopup()
+            }
+        }
+        headerRow.addView(closeBtn)
+        card.addView(headerRow)
+
+        val titleText = if (locked) "Nueva notificación" else pulse.title
+        if (titleText.isNotBlank()) {
+            card.addView(
+                android.widget.TextView(this).apply {
+                    text = titleText
+                    textSize = 14f
+                    setTypeface(android.graphics.Typeface.DEFAULT_BOLD)
+                    setTextColor(android.graphics.Color.WHITE)
+                    maxLines = 2
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                },
+                android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(6) }
+            )
+        }
+
+        val bodyText = when {
+            locked -> "Contenido oculto mientras el teléfono está bloqueado"
+            pulse.textPreview.isNotBlank() -> pulse.textPreview
+            else -> "Toca para abrir en ventana flotante"
+        }
+        card.addView(
+            android.widget.TextView(this).apply {
+                text = bodyText
+                textSize = 13f
+                setTextColor(android.graphics.Color.argb(215, 232, 236, 245))
+                maxLines = 5
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            },
+            android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(4) }
+        )
+
+        val actionsRow = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        }
+
+        fun makeActionChip(label: String, highlight: Boolean, onClick: () -> Unit): android.widget.TextView =
+            android.widget.TextView(this).apply {
+                text = label
+                textSize = 12f
+                setTypeface(android.graphics.Typeface.DEFAULT_BOLD)
+                setTextColor(if (highlight) accent else android.graphics.Color.WHITE)
+                setPadding(dp(11), dp(6), dp(11), dp(6))
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                    cornerRadius = dp(14).toFloat()
+                    setColor(
+                        if (highlight) android.graphics.Color.argb(46, android.graphics.Color.red(accent), android.graphics.Color.green(accent), android.graphics.Color.blue(accent))
+                        else android.graphics.Color.argb(32, 255, 255, 255)
+                    )
+                }
+                setOnClickListener {
+                    Haptics.perform(this@EdgePanelService)
+                    onClick()
+                }
+            }
+
+        if (!locked) {
+            pulse.actions.take(2).forEach { action ->
+                actionsRow.addView(
+                    makeActionChip(action.title, highlight = false) {
+                        hideNotificationPreviewPopup()
+                        runCatching { action.intent.send() }
+                    },
+                    android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { marginEnd = dp(6) }
+                )
+            }
+        }
+
+        actionsRow.addView(
+            makeActionChip("Abrir flotante", highlight = true) {
+                openLatestNotification()
+            }
+        )
+
+        card.addView(
+            actionsRow,
+            android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(10) }
+        )
+
+        val statusRes = resources.getIdentifier("status_bar_height", "dimen", "android")
+        val statusPx = if (statusRes > 0) resources.getDimensionPixelSize(statusRes) else dp(32)
+        val params = WindowManager.LayoutParams(
+            cardWidth,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = statusPx + dp(10)
+        }
+
+        runCatching {
+            card.alpha = 0f
+            card.translationY = -dp(12).toFloat()
+            windowManager.addView(card, params)
+            notificationPreviewView = card
+            card.animate().alpha(1f).translationY(0f).setDuration(180L).start()
+            gestureHandler.removeCallbacks(hideNotificationPreviewRunnable)
+            gestureHandler.postDelayed(hideNotificationPreviewRunnable, 8_000L)
+        }
+    }
+
+    private fun hideNotificationPreviewPopup() {
+        gestureHandler.removeCallbacks(hideNotificationPreviewRunnable)
+        notificationPreviewView?.let { runCatching { windowManager.removeView(it) } }
+        notificationPreviewView = null
     }
 
     private fun prefetchPreviousApp(updatePreview: Boolean = false) {
