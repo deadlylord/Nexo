@@ -100,6 +100,15 @@ object FloatingWindowRegistry {
         EdgePanelService.syncFloatingBubble(context)
     }
 
+    fun updateObservedBounds(context: Context, packageName: String, bounds: Rect) {
+        val current = _entries.value.firstOrNull { it.packageName == packageName && !it.minimized } ?: return
+        if (current.lastBounds == bounds) return
+        _entries.update { list ->
+            list.map { if (it.packageName == packageName) it.copy(lastBounds = Rect(bounds)) else it }
+        }
+        EdgePanelService.syncFloatingBubble(context)
+    }
+
     fun moveEntry(fromIndex: Int, toIndex: Int) {
         _entries.update { list ->
             if (fromIndex !in list.indices || toIndex !in list.indices || fromIndex == toIndex) return@update list

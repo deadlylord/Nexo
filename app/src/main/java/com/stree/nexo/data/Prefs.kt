@@ -198,6 +198,13 @@ object Prefs {
         prefs(context).edit().putBoolean("edge_pulse_notification", enabled).apply()
     }
 
+    fun edgeNotificationDoubleTapPreview(context: Context): Boolean =
+        prefs(context).getBoolean("edge_notification_double_tap_preview", true)
+
+    fun setEdgeNotificationDoubleTapPreview(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("edge_notification_double_tap_preview", enabled).apply()
+    }
+
     fun dynamicIslandEnabled(context: Context): Boolean =
         prefs(context).getBoolean("dynamic_island_enabled", true)
 

@@ -50,8 +50,12 @@ class SplitScreenService : AccessibilityService() {
             }
             return
         }
-        // Solo se usa el nombre del paquete y el tipo de evento para saber
-        // cuándo la primera app ya tiene el foco. No se lee contenido.
+        // Solo se usa el nombre del paquete y la geometría de ventana (bounds), sin leer contenido.
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED ||
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ) {
+            reportFloatingWindowBounds()
+        }
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val expected = waitingFor ?: return
         if (event.packageName?.toString() != expected) return
@@ -61,6 +65,38 @@ class SplitScreenService : AccessibilityService() {
         fallback = null
         // Margen para que la ventana termine de asentarse antes de dividir.
         handler.postDelayed({ proceedToSplit() }, SETTLE_DELAY_MS)
+    }
+
+    private fun reportFloatingWindowBounds() {
+        val active = com.stree.nexo.floating.FloatingWindowRegistry.entries.value
+            .firstOrNull { !it.minimized } ?: return
+        val allWindows = runCatching { windows }.getOrNull() ?: return
+        val dm = resources.displayMetrics
+        val rect = android.graphics.Rect()
+        var matched: android.graphics.Rect? = null
+        for (w in allWindows) {
+            if (w.type != android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION) continue
+            w.getBoundsInScreen(rect)
+            if (rect.width() <= 0 || rect.height() <= 0) continue
+            // Una ventana flotante (freeform) no ocupa la pantalla completa a la vez en ancho y alto.
+            val isFreeform = rect.width() < (dm.widthPixels * 0.96f) || rect.height() < (dm.heightPixels * 0.90f)
+            if (!isFreeform) continue
+            val titleMatch = w.title?.toString()?.contains(active.label, ignoreCase = true) == true
+            if (titleMatch) {
+                matched = android.graphics.Rect(rect)
+                break
+            }
+            if (matched == null && w.isFocused) {
+                matched = android.graphics.Rect(rect)
+            }
+        }
+        if (matched != null) {
+            com.stree.nexo.floating.FloatingWindowRegistry.updateObservedBounds(
+                applicationContext,
+                active.packageName,
+                matched
+            )
+        }
     }
 
     /**

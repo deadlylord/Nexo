@@ -1496,6 +1496,7 @@ private fun EdgeLiveAlertsCard() {
     var pulseCopy by remember { mutableStateOf(Prefs.edgePulseOnCopy(context)) }
     var pulseScreenshot by remember { mutableStateOf(Prefs.edgePulseOnScreenshot(context)) }
     var pulseNotification by remember { mutableStateOf(Prefs.edgePulseOnNotification(context)) }
+    var notificationPreview by remember { mutableStateOf(Prefs.edgeNotificationDoubleTapPreview(context)) }
 
     SettingsSectionCard(
         title = "Barra viva (avisos laterales)",
@@ -1533,6 +1534,18 @@ private fun EdgeLiveAlertsCard() {
                 Prefs.setEdgePulseOnNotification(context, it)
             }
         )
+        if (pulseNotification) {
+            SectionDivider()
+            SwitchRow(
+                title = "Vista previa al doble toque",
+                subtitle = "Al dar doble click en el icono de notificación del borde, despliega el mensaje junto a la barra; toca el icono o ✕ para cerrarla",
+                checked = notificationPreview,
+                onCheckedChange = {
+                    notificationPreview = it
+                    Prefs.setEdgeNotificationDoubleTapPreview(context, it)
+                }
+            )
+        }
     }
 }
 

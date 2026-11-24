@@ -354,6 +354,11 @@ class EdgePanelService : Service() {
 
             override fun onSingleTapConfirmed(event: MotionEvent): Boolean {
                 if (!rejectedGesture && !pullTriggered && !doubleTapHandled) {
+                    if (notificationPreviewView != null) {
+                        Haptics.perform(this@EdgePanelService)
+                        dismissNotificationPreviewAndCollapse()
+                        return true
+                    }
                     val view = handleView
                     if (view != null && view.isShowingLiveAlert()) {
                         handleLiveAlertTap(view.liveMode)
@@ -367,11 +372,17 @@ class EdgePanelService : Service() {
             override fun onDoubleTap(event: MotionEvent): Boolean {
                 doubleTapHandled = true
                 gestureHandler.removeCallbacks(holdAction)
-                val view = handleView
-                if (view != null && view.isShowingLiveAlert() && view.liveMode == EdgeLiveMode.NOTIFICATION) {
+                if (notificationPreviewView != null) {
                     Haptics.perform(this@EdgePanelService)
-                    collapseLiveAlert()
-                    showNotificationPreview()
+                    dismissNotificationPreviewAndCollapse()
+                    return true
+                }
+                val view = handleView
+                if (view != null && view.isShowingLiveAlert() && view.liveMode == EdgeLiveMode.NOTIFICATION &&
+                    Prefs.edgeNotificationDoubleTapPreview(this@EdgePanelService)
+                ) {
+                    Haptics.perform(this@EdgePanelService)
+                    showNotificationPreviewFromEdge()
                     return true
                 }
                 collapseLiveAlert()
@@ -1427,19 +1438,21 @@ class EdgePanelService : Service() {
     }
 
     private var notificationPreviewView: View? = null
-    private val hideNotificationPreviewRunnable = Runnable { hideNotificationPreviewPopup() }
 
     /**
-     * Muestra o expande una vista previa de la última notificación al dar doble toque
-     * en el botón de notificación del borde.
+     * Despliega la vista previa de la notificación saliendo directamente desde el
+     * icono del borde, manteniendo el icono visible para poder cerrarla desde ahí.
      */
-    private fun showNotificationPreview() {
+    private fun showNotificationPreviewFromEdge() {
         val pulse = ClipboardHistoryStore.latestNotification ?: return
-        if (islandView != null && Prefs.dynamicIslandEnabled(this)) {
-            expandLatestNotification()
-            return
-        }
+        // Mantiene el icono del borde visible mientras la vista previa está abierta
+        gestureHandler.removeCallbacks(collapseAlertRunnable)
         showNotificationPreviewPopup(pulse)
+    }
+
+    private fun dismissNotificationPreviewAndCollapse() {
+        hideNotificationPreviewPopup()
+        collapseLiveAlert()
     }
 
     private fun showNotificationPreviewPopup(pulse: NotificationPulse) {
@@ -1447,7 +1460,24 @@ class EdgePanelService : Service() {
         if (!Settings.canDrawOverlays(this)) return
 
         val dm = resources.displayMetrics
-        val cardWidth = (dm.widthPixels - dp(28)).coerceIn(dp(240), dp(390))
+        val side = Prefs.panelSide(this)
+        val isLeft = side == PanelSide.START
+        val handleW = handleView?.width?.takeIf { it > 0 } ?: dp(60)
+        val anchorOffsetX = handleW + dp(6)
+        val cardWidth = (dm.widthPixels - anchorOffsetX - dp(16)).coerceIn(dp(220), dp(336))
+
+        // Altura Y exactamente alineada con el icono de notificación del borde
+        val loc = IntArray(2)
+        val anchorY = if (handleView != null && handleView!!.isAttachedToWindow) {
+            handleView!!.getLocationOnScreen(loc)
+            loc[1]
+        } else {
+            (dm.heightPixels * 0.36f).toInt()
+        }
+        val statusRes = resources.getIdentifier("status_bar_height", "dimen", "android")
+        val statusPx = if (statusRes > 0) resources.getDimensionPixelSize(statusRes) else dp(32)
+        val clampedY = (anchorY - dp(14)).coerceIn(statusPx + dp(8), (dm.heightPixels - dp(210)).coerceAtLeast(statusPx + dp(8)))
+
         val locked = isDeviceLocked()
         val spec = Prefs.panelStyle(this).visualSpec(light = false)
         val accent = pulse.accentColor ?: spec.primary.toArgb()
@@ -1458,11 +1488,51 @@ class EdgePanelService : Service() {
             elevation = dp(10).toFloat()
             background = android.graphics.drawable.GradientDrawable().apply {
                 shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-                cornerRadius = dp(22).toFloat()
-                setColor(android.graphics.Color.argb(242, 16, 18, 28))
+                cornerRadius = dp(20).toFloat()
+                setColor(android.graphics.Color.argb(244, 16, 18, 28))
                 setStroke(dp(1), accent)
             }
-            setOnClickListener { openLatestNotification() }
+            setOnClickListener {
+                collapseLiveAlert()
+                openLatestNotification()
+            }
+        }
+
+        // Permite cerrar deslizando la tarjeta hacia el borde del que salió
+        var swipeStartX = 0f
+        var swiping = false
+        card.setOnTouchListener { v, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    swipeStartX = event.rawX
+                    swiping = false
+                    false
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - swipeStartX
+                    val towardEdge = if (isLeft) -dx else dx
+                    if (towardEdge > touchSlop) {
+                        swiping = true
+                        v.translationX = dx
+                        v.alpha = (1f - (towardEdge / dp(140).toFloat())).coerceIn(0.25f, 1f)
+                        true
+                    } else false
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (swiping) {
+                        val dx = event.rawX - swipeStartX
+                        val towardEdge = if (isLeft) -dx else dx
+                        if (towardEdge > dp(56)) {
+                            Haptics.perform(this@EdgePanelService)
+                            dismissNotificationPreviewAndCollapse()
+                        } else {
+                            v.animate().translationX(0f).alpha(1f).setDuration(140L).start()
+                        }
+                        true
+                    } else false
+                }
+                else -> false
+            }
         }
 
         val headerRow = android.widget.LinearLayout(this).apply {
@@ -1481,7 +1551,7 @@ class EdgePanelService : Service() {
                     }
                 }
             }
-            headerRow.addView(icon, android.widget.LinearLayout.LayoutParams(dp(26), dp(26)).apply {
+            headerRow.addView(icon, android.widget.LinearLayout.LayoutParams(dp(24), dp(24)).apply {
                 marginEnd = dp(8)
             })
         }
@@ -1499,12 +1569,12 @@ class EdgePanelService : Service() {
         val closeBtn = android.widget.TextView(this).apply {
             text = "✕"
             textSize = 13f
-            setTextColor(android.graphics.Color.argb(190, 255, 255, 255))
+            setTextColor(android.graphics.Color.argb(200, 255, 255, 255))
             gravity = Gravity.CENTER
             setPadding(dp(8), dp(4), dp(4), dp(4))
             setOnClickListener {
                 Haptics.perform(this@EdgePanelService)
-                hideNotificationPreviewPopup()
+                dismissNotificationPreviewAndCollapse()
             }
         }
         headerRow.addView(closeBtn)
@@ -1537,8 +1607,8 @@ class EdgePanelService : Service() {
             android.widget.TextView(this).apply {
                 text = bodyText
                 textSize = 13f
-                setTextColor(android.graphics.Color.argb(215, 232, 236, 245))
-                maxLines = 5
+                setTextColor(android.graphics.Color.argb(220, 232, 236, 245))
+                maxLines = 6
                 ellipsize = android.text.TextUtils.TruncateAt.END
             },
             android.widget.LinearLayout.LayoutParams(
@@ -1577,7 +1647,7 @@ class EdgePanelService : Service() {
             pulse.actions.take(2).forEach { action ->
                 actionsRow.addView(
                     makeActionChip(action.title, highlight = false) {
-                        hideNotificationPreviewPopup()
+                        dismissNotificationPreviewAndCollapse()
                         runCatching { action.intent.send() }
                     },
                     android.widget.LinearLayout.LayoutParams(
@@ -1590,6 +1660,7 @@ class EdgePanelService : Service() {
 
         actionsRow.addView(
             makeActionChip("Abrir flotante", highlight = true) {
+                collapseLiveAlert()
                 openLatestNotification()
             }
         )
@@ -1602,8 +1673,6 @@ class EdgePanelService : Service() {
             ).apply { topMargin = dp(10) }
         )
 
-        val statusRes = resources.getIdentifier("status_bar_height", "dimen", "android")
-        val statusPx = if (statusRes > 0) resources.getDimensionPixelSize(statusRes) else dp(32)
         val params = WindowManager.LayoutParams(
             cardWidth,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -1612,23 +1681,30 @@ class EdgePanelService : Service() {
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            y = statusPx + dp(10)
+            gravity = (if (isLeft) Gravity.START else Gravity.END) or Gravity.TOP
+            x = anchorOffsetX
+            y = clampedY
         }
 
         runCatching {
+            val startOffset = (if (isLeft) -dp(26) else dp(26)).toFloat()
             card.alpha = 0f
-            card.translationY = -dp(12).toFloat()
+            card.translationX = startOffset
+            card.scaleX = 0.92f
+            card.scaleY = 0.92f
             windowManager.addView(card, params)
             notificationPreviewView = card
-            card.animate().alpha(1f).translationY(0f).setDuration(180L).start()
-            gestureHandler.removeCallbacks(hideNotificationPreviewRunnable)
-            gestureHandler.postDelayed(hideNotificationPreviewRunnable, 8_000L)
+            card.animate()
+                .alpha(1f)
+                .translationX(0f)
+                .scaleX(1f)
+                .scaleY(1f)
+                .setDuration(190L)
+                .start()
         }
     }
 
     private fun hideNotificationPreviewPopup() {
-        gestureHandler.removeCallbacks(hideNotificationPreviewRunnable)
         notificationPreviewView?.let { runCatching { windowManager.removeView(it) } }
         notificationPreviewView = null
     }

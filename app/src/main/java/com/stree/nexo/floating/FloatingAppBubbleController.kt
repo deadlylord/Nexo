@@ -56,11 +56,9 @@ class FloatingAppBubbleController(
     private var countBadge: TextView? = null
     private var statusDot: View? = null
 
-    // Barra superior de la ventana flotante activa
-    private var topBarRoot: LinearLayout? = null
+    // Botón compacto único al lado de los controles nativos (— □ ×) de la ventana flotante
+    private var topBarRoot: FrameLayout? = null
     private var topBarParams: WindowManager.LayoutParams? = null
-    private var topBarIcon: ImageView? = null
-    private var topBarTitle: TextView? = null
     private var topBarMenuBtn: TextView? = null
     private var topBarActivePkg: String? = null
     private var topBarCustomPos = false
@@ -86,16 +84,16 @@ class FloatingAppBubbleController(
         val activeEntry = entries.firstOrNull { !it.minimized }
         val minimizedEntries = entries.filter { it.minimized }
 
-        // Barra superior visible siempre que haya una app abierta en ventana flotante
+        // Icono compacto único al lado de — □ × cuando hay una app abierta en ventana flotante
         if (activeEntry != null) {
             if (topBarActivePkg != activeEntry.packageName) {
                 topBarActivePkg = activeEntry.packageName
                 topBarCustomPos = false
             }
             if (topBarRoot == null) {
-                attachTopBar(activeEntry)
+                attachCompactWindowButton(activeEntry)
             }
-            renderTopBar(activeEntry, entries.size)
+            renderCompactWindowButton(activeEntry)
         } else {
             hideTopBar()
         }
@@ -135,8 +133,6 @@ class FloatingAppBubbleController(
         topBarRoot?.let { runCatching { wm.removeView(it) } }
         topBarRoot = null
         topBarParams = null
-        topBarIcon = null
-        topBarTitle = null
         topBarMenuBtn = null
         topBarActivePkg = null
         topBarCustomPos = false
@@ -148,248 +144,133 @@ class FloatingAppBubbleController(
         Prefs.panelStyle(context).visualSpec(light = false).primary.toArgb()
 
     // -------------------------------------------------------------------------
-    // 1. Barra superior profesional para la app en ventana flotante
+    // 1. Icono compacto único al lado de — □ × en la barra nativa de la ventana
     // -------------------------------------------------------------------------
 
-    private fun attachTopBar(active: FloatingAppEntry) {
+    private fun computeAnchorPosition(active: FloatingAppEntry, hitSize: Int): Pair<Int, Int> {
         val dm = context.resources.displayMetrics
-        val barWidth = (dm.widthPixels * 0.86f).toInt().coerceIn(px(268), px(380))
-        val barHeight = px(40)
         val statusRes = context.resources.getIdentifier("status_bar_height", "dimen", "android")
         val statusPx = if (statusRes > 0) context.resources.getDimensionPixelSize(statusRes) else px(32)
+        val bounds = active.lastBounds
+        val x = if (bounds != null) {
+            // Espacio libre justo a la izquierda del botón nativo "—" (— □ × ocupan ~124 dp)
+            (bounds.right - px(152)).coerceIn(px(12), (dm.widthPixels - hitSize - px(8)).coerceAtLeast(px(12)))
+        } else {
+            (dm.widthPixels - px(176)).coerceAtLeast(px(12))
+        }
+        val y = if (bounds != null) {
+            (bounds.top + px(3)).coerceIn(px(16), (dm.heightPixels - hitSize - px(24)).coerceAtLeast(px(16)))
+        } else {
+            statusPx + px(8)
+        }
+        return x to y
+    }
 
-        val defaultY = active.lastBounds?.let { (it.top - barHeight - px(6)).coerceAtLeast(statusPx + px(4)) }
-            ?: (statusPx + px(8))
-        val defaultX = ((dm.widthPixels - barWidth) / 2).coerceAtLeast(px(8))
+    private fun attachCompactWindowButton(active: FloatingAppEntry) {
+        val hitSize = px(36)
+        val (startX, startY) = computeAnchorPosition(active, hitSize)
 
         val params = WindowManager.LayoutParams(
-            barWidth,
-            barHeight,
+            hitSize,
+            hitSize,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = defaultX
-            y = defaultY
+            x = startX
+            y = startY
         }
 
-        val bar = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(px(8), px(4), px(6), px(4))
-            elevation = px(8).toFloat()
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = px(20).toFloat()
-                setColor(Color.argb(238, 18, 20, 30))
-                setStroke(px(1), accentColor())
-            }
+        val accent = accentColor()
+        val holder = FrameLayout(context).apply {
+            contentDescription = "Menú de ventanas flotantes de Nexo"
         }
 
-        // Zona izquierda arrastrable: icono + nombre de la app flotante
-        val dragZone = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(px(2), 0, px(6), 0)
-        }
-
-        val iconView = ImageView(context).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            clipToOutline = true
-            outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: Outline) {
-                    outline.setRoundRect(0, 0, view.width, view.height, px(6).toFloat())
-                }
-            }
-        }
-        dragZone.addView(iconView, LinearLayout.LayoutParams(px(22), px(22)).apply {
-            marginEnd = px(6)
-        })
-
-        val titleView = TextView(context).apply {
-            textSize = 12f
+        val btn = TextView(context).apply {
+            text = "⊞"
+            textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.END
-        }
-        dragZone.addView(titleView, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-
-        attachTopBarDrag(dragZone, bar, params)
-        bar.addView(dragZone, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
-
-        fun makeActionButton(
-            symbol: String,
-            desc: String,
-            tint: Int = Color.WHITE,
-            bgColor: Int = Color.TRANSPARENT,
-            onClick: () -> Unit
-        ): TextView = TextView(context).apply {
-            text = symbol
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(tint)
-            contentDescription = desc
+            setTextColor(accent)
             gravity = Gravity.CENTER
             includeFontPadding = false
+            elevation = px(4).toFloat()
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(bgColor)
-            }
-            setOnClickListener {
-                Haptics.perform(context)
-                onClick()
+                setColor(Color.argb(196, 18, 20, 30))
+                setStroke(px(1), accent)
             }
         }
+        holder.addView(btn, FrameLayout.LayoutParams(px(28), px(28), Gravity.CENTER))
 
-        val btnLp = {
-            LinearLayout.LayoutParams(px(30), px(30)).apply {
-                marginStart = px(3)
-            }
-        }
-
-        // 1. Menú de ventanas flotantes y layouts
-        val menuBtn = makeActionButton(
-            symbol = "⊞",
-            desc = "Menú de ventanas flotantes",
-            tint = accentColor(),
-            bgColor = Color.argb(46, Color.red(accentColor()), Color.green(accentColor()), Color.blue(accentColor()))
-        ) {
-            onOpenMenu(false)
-        }
-        bar.addView(menuBtn, btnLp())
-
-        // 2. Pantalla dividida
-        val splitBtn = makeActionButton(
-            symbol = "◫",
-            desc = "Pantalla dividida",
-            tint = Color.WHITE,
-            bgColor = Color.argb(30, 255, 255, 255)
-        ) {
-            val all = FloatingWindowRegistry.entries.value
-            val current = all.firstOrNull { !it.minimized } ?: all.firstOrNull() ?: return@makeActionButton
-            val second = all.firstOrNull { it.packageName != current.packageName }
-            if (second != null) {
-                FloatingWindowRegistry.openSplitScreen(context, current.packageName, second.packageName)
-            } else {
-                onOpenMenu(true)
-            }
-        }
-        bar.addView(splitBtn, btnLp())
-
-        // 3. Minimizar a burbuja
-        val minBtn = makeActionButton(
-            symbol = "—",
-            desc = "Minimizar a burbuja",
-            tint = Color.WHITE,
-            bgColor = Color.argb(30, 255, 255, 255)
-        ) {
-            val current = FloatingWindowRegistry.entries.value.firstOrNull { !it.minimized }
-                ?: FloatingWindowRegistry.entries.value.firstOrNull()
-                ?: return@makeActionButton
-            FloatingWindowRegistry.markMinimized(context, current.packageName)
-            EdgePanelService.minimizeToBackground(context)
-        }
-        bar.addView(minBtn, btnLp())
-
-        // 4. Maximizar a pantalla completa
-        val maxBtn = makeActionButton(
-            symbol = "⤢",
-            desc = "Maximizar",
-            tint = Color.WHITE,
-            bgColor = Color.argb(30, 255, 255, 255)
-        ) {
-            val current = FloatingWindowRegistry.entries.value.firstOrNull { !it.minimized }
-                ?: FloatingWindowRegistry.entries.value.firstOrNull()
-                ?: return@makeActionButton
-            FloatingWindowRegistry.remove(context, current.packageName)
-            ItemLauncher.launchPackageFullscreen(context, current.packageName)
-        }
-        bar.addView(maxBtn, btnLp())
-
-        // 5. Cerrar definitivamente (X)
-        val closeBtn = makeActionButton(
-            symbol = "✕",
-            desc = "Cerrar ventana definitivamente",
-            tint = Color.rgb(251, 113, 133),
-            bgColor = Color.argb(45, 251, 113, 133)
-        ) {
-            Haptics.perform(context, strong = true)
-            val current = FloatingWindowRegistry.entries.value.firstOrNull { !it.minimized }
-                ?: FloatingWindowRegistry.entries.value.firstOrNull()
-                ?: return@makeActionButton
-            FloatingWindowRegistry.closeAppDefinitively(context, current.packageName)
-        }
-        bar.addView(closeBtn, btnLp())
-
-        runCatching {
-            wm.addView(bar, params)
-            topBarRoot = bar
-            topBarParams = params
-            topBarIcon = iconView
-            topBarTitle = titleView
-            topBarMenuBtn = menuBtn
-        }
-    }
-
-    private fun renderTopBar(active: FloatingAppEntry, totalCount: Int) {
-        val accent = accentColor()
-        (topBarRoot?.background as? GradientDrawable)?.setStroke(px(1), accent)
-        topBarMenuBtn?.setTextColor(accent)
-        (topBarMenuBtn?.background as? GradientDrawable)?.setColor(
-            Color.argb(46, Color.red(accent), Color.green(accent), Color.blue(accent))
-        )
-
-        val drawable = runCatching {
-            context.packageManager.getApplicationIcon(active.packageName)
-        }.getOrNull()
-        topBarIcon?.setImageDrawable(drawable)
-        topBarTitle?.text = if (totalCount > 1) "${active.label} ($totalCount)" else active.label
-
-        if (!topBarCustomPos) {
-            val root = topBarRoot ?: return
-            val params = topBarParams ?: return
-            val dm = context.resources.displayMetrics
-            val statusRes = context.resources.getIdentifier("status_bar_height", "dimen", "android")
-            val statusPx = if (statusRes > 0) context.resources.getDimensionPixelSize(statusRes) else px(32)
-            val targetY = active.lastBounds?.let { (it.top - params.height - px(6)).coerceAtLeast(statusPx + px(4)) }
-                ?: (statusPx + px(8))
-            val targetX = ((dm.widthPixels - params.width) / 2).coerceAtLeast(px(8))
-            if (params.x != targetX || params.y != targetY) {
-                params.x = targetX
-                params.y = targetY
-                runCatching { wm.updateViewLayout(root, params) }
-            }
-        }
-    }
-
-    private fun attachTopBarDrag(handle: View, root: View, params: WindowManager.LayoutParams) {
+        val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
         var startRawX = 0f
         var startRawY = 0f
-        var startX = 0
-        var startY = 0
-        handle.setOnTouchListener { _, event ->
+        var downX = 0
+        var downY = 0
+        var dragging = false
+
+        holder.setOnTouchListener { _, event ->
             val dm = context.resources.displayMetrics
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     startRawX = event.rawX
                     startRawY = event.rawY
-                    startX = params.x
-                    startY = params.y
+                    downX = params.x
+                    downY = params.y
+                    dragging = false
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    topBarCustomPos = true
-                    params.x = (startX + event.rawX - startRawX).toInt()
-                        .coerceIn(px(4), (dm.widthPixels - params.width - px(4)).coerceAtLeast(px(4)))
-                    params.y = (startY + event.rawY - startRawY).toInt()
-                        .coerceIn(px(28), (dm.heightPixels - params.height - px(24)).coerceAtLeast(px(28)))
-                    runCatching { wm.updateViewLayout(root, params) }
+                    val dx = event.rawX - startRawX
+                    val dy = event.rawY - startRawY
+                    if (!dragging && hypot(dx.toDouble(), dy.toDouble()) > touchSlop) {
+                        dragging = true
+                        topBarCustomPos = true
+                    }
+                    if (dragging) {
+                        params.x = (downX + dx).toInt()
+                            .coerceIn(px(4), (dm.widthPixels - hitSize - px(4)).coerceAtLeast(px(4)))
+                        params.y = (downY + dy).toInt()
+                            .coerceIn(px(16), (dm.heightPixels - hitSize - px(16)).coerceAtLeast(px(16)))
+                        runCatching { wm.updateViewLayout(holder, params) }
+                    }
                     true
                 }
-                else -> true
+                MotionEvent.ACTION_UP -> {
+                    if (!dragging) {
+                        Haptics.perform(context)
+                        onOpenMenu(false)
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+
+        runCatching {
+            wm.addView(holder, params)
+            topBarRoot = holder
+            topBarParams = params
+            topBarMenuBtn = btn
+        }
+    }
+
+    private fun renderCompactWindowButton(active: FloatingAppEntry) {
+        val accent = accentColor()
+        topBarMenuBtn?.setTextColor(accent)
+        (topBarMenuBtn?.background as? GradientDrawable)?.setStroke(px(1), accent)
+
+        if (!topBarCustomPos) {
+            val root = topBarRoot ?: return
+            val params = topBarParams ?: return
+            val (targetX, targetY) = computeAnchorPosition(active, params.width)
+            if (params.x != targetX || params.y != targetY) {
+                params.x = targetX
+                params.y = targetY
+                runCatching { wm.updateViewLayout(root, params) }
             }
         }
     }
