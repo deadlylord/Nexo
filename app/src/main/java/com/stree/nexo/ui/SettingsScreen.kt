@@ -805,7 +805,7 @@ private fun PanelHeroCard(
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "Minimiza apps flotantes en burbuja y acopla varias ventanas en layouts",
+                            text = "Al minimizar una ventana flotante queda en burbuja: 1 toque reabre en flotante, doble toque abre menú y pantalla dividida",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

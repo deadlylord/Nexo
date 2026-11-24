@@ -1,16 +1,24 @@
 package com.stree.nexo.floating
 
 import android.animation.ValueAnimator
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorFilter
 import android.graphics.Outline
+import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
-import android.text.TextUtils
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -20,23 +28,27 @@ import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
-import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.compose.ui.graphics.toArgb
 import com.stree.nexo.data.Haptics
 import com.stree.nexo.data.PanelSide
 import com.stree.nexo.data.Prefs
-import com.stree.nexo.panel.EdgePanelService
+import com.stree.nexo.data.UsageStore
+import com.stree.nexo.panel.SplitScreenService
 import com.stree.nexo.search.ItemLauncher
 import com.stree.nexo.ui.theme.visualSpec
 import kotlin.math.hypot
 
 /**
- * Controlador de overlays para ventanas flotantes:
- * 1. Barra superior profesional sobre la ventana flotante activa (Menú flotante,
- *    Pantalla dividida, Minimizar a burbuja, Maximizar y ✕ Cerrar definitivamente).
- * 2. Burbuja flotante apilada en el borde cuando la app está minimizada (un toque la
- *    reabre directo en ventana flotante; arrastrar a ✕ inferior limpia las burbujas).
+ * Controlador de la burbuja flotante lateral para ventanas minimizadas:
+ * - Detecta automáticamente cuando el usuario pulsa minimizar ("—") en la barra nativa
+ *   de una ventana flotante (vía UsageStatsManager y/o SplitScreenService) y muestra
+ *   la app como burbuja apilada en el borde.
+ * - Un toque en la burbuja reabre la app directamente en ventana flotante.
+ * - Doble toque en la burbuja abre el menú de pantallas divididas y ventanas flotantes.
+ * - Incluye un pequeño indicador visual (icono 2×2) encima de la burbuja para señalar
+ *   que el menú de ventanas / pantalla dividida está disponible.
+ * - Arrastrar hacia la ✕ inferior limpia todas las burbujas.
  */
 class FloatingAppBubbleController(
     private val context: Context,
@@ -44,6 +56,7 @@ class FloatingAppBubbleController(
 ) {
     private val wm = context.getSystemService(WindowManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
+    private val usageStore = UsageStore(context)
 
     // Burbuja lateral (apps minimizadas)
     private var bubbleRoot: FrameLayout? = null
@@ -53,20 +66,31 @@ class FloatingAppBubbleController(
     private var backStackView: View? = null
     private var mainRingView: FrameLayout? = null
     private var appIconView: ImageView? = null
+    private var menuIndicatorView: View? = null
     private var countBadge: TextView? = null
-    private var statusDot: View? = null
-
-    // Botón compacto único al lado de los controles nativos (— □ ×) de la ventana flotante
-    private var topBarRoot: FrameLayout? = null
-    private var topBarParams: WindowManager.LayoutParams? = null
-    private var topBarMenuBtn: TextView? = null
-    private var topBarActivePkg: String? = null
-    private var topBarCustomPos = false
 
     private var snapRight: Boolean = Prefs.panelSide(context) == PanelSide.END
     private var savedYRatio: Float = 0.36f
     private var snapAnimator: ValueAnimator? = null
     private var suppressed = false
+
+    // Vigilante ligero de ventanas flotantes abiertas (detecta minimizar nativo "—")
+    private var watcherRunning = false
+    private var wasScreenOff = false
+    private var screenWakeGraceUntilMs = 0L
+
+    // Gestión de toque simple vs doble toque
+    private var pendingSingleTap: Runnable? = null
+
+    private val activeWatcherRunnable = object : Runnable {
+        override fun run() {
+            if (!watcherRunning) return
+            checkActiveWindowsForNativeMinimize()
+            if (watcherRunning) {
+                handler.postDelayed(this, WATCHER_POLL_MS)
+            }
+        }
+    }
 
     fun setSuppressed(hidden: Boolean) {
         suppressed = hidden
@@ -81,29 +105,30 @@ class FloatingAppBubbleController(
             return
         }
 
-        val activeEntry = entries.firstOrNull { !it.minimized }
+        val activeEntries = entries.filter { !it.minimized }
         val minimizedEntries = entries.filter { it.minimized }
+        val hasUsageAccess = usageStore.hasUsageAccess()
+        val canDetectMinimize = SplitScreenService.isRunning() || hasUsageAccess
 
-        // Icono compacto único al lado de — □ × cuando hay una app abierta en ventana flotante
-        if (activeEntry != null) {
-            if (topBarActivePkg != activeEntry.packageName) {
-                topBarActivePkg = activeEntry.packageName
-                topBarCustomPos = false
-            }
-            if (topBarRoot == null) {
-                attachCompactWindowButton(activeEntry)
-            }
-            renderCompactWindowButton(activeEntry)
+        // Vigila ventanas flotantes activas para convertirlas en burbuja al pulsar "—" nativo
+        if (activeEntries.isNotEmpty() && hasUsageAccess) {
+            startActiveWindowWatcher()
         } else {
-            hideTopBar()
+            stopActiveWindowWatcher()
         }
 
-        // Burbuja circular visible para apps minimizadas
-        if (minimizedEntries.isNotEmpty()) {
-            if (bubbleRoot == null) {
+        // Si podemos detectar el minimizar nativo, la burbuja solo aparece cuando hay apps minimizadas;
+        // si no hay ni Accesibilidad ni Acceso de Uso, mostramos la burbuja como respaldo inmediato.
+        val bubbleEntries = if (canDetectMinimize) minimizedEntries else entries
+        if (bubbleEntries.isNotEmpty()) {
+            val isNewBubble = bubbleRoot == null
+            if (isNewBubble) {
                 attachBubble()
             }
-            renderBubble(minimizedEntries)
+            renderBubble(bubbleEntries)
+            if (isNewBubble) {
+                animateBubbleEntrance()
+            }
         } else {
             hideBubbleOnly()
         }
@@ -112,12 +137,14 @@ class FloatingAppBubbleController(
     fun hide() {
         snapAnimator?.cancel()
         snapAnimator = null
+        stopActiveWindowWatcher()
+        cancelPendingSingleTap()
         handler.removeCallbacksAndMessages(null)
-        hideTopBar()
         hideBubbleOnly()
     }
 
     private fun hideBubbleOnly() {
+        cancelPendingSingleTap()
         hideDismissTarget()
         bubbleRoot?.let { runCatching { wm.removeView(it) } }
         bubbleRoot = null
@@ -125,17 +152,108 @@ class FloatingAppBubbleController(
         backStackView = null
         mainRingView = null
         appIconView = null
+        menuIndicatorView = null
         countBadge = null
-        statusDot = null
     }
 
-    private fun hideTopBar() {
-        topBarRoot?.let { runCatching { wm.removeView(it) } }
-        topBarRoot = null
-        topBarParams = null
-        topBarMenuBtn = null
-        topBarActivePkg = null
-        topBarCustomPos = false
+    private fun startActiveWindowWatcher() {
+        if (watcherRunning) return
+        watcherRunning = true
+        handler.removeCallbacks(activeWatcherRunnable)
+        handler.postDelayed(activeWatcherRunnable, WATCHER_POLL_MS)
+    }
+
+    private fun stopActiveWindowWatcher() {
+        watcherRunning = false
+        handler.removeCallbacks(activeWatcherRunnable)
+    }
+
+    /**
+     * Consulta eventos de ciclo de vida recientes para detectar cuando una ventana flotante
+     * pasa a segundo plano / oculta (p. ej. al pulsar "—" en la barra nativa de Android/One UI).
+     */
+    private fun checkActiveWindowsForNativeMinimize() {
+        val activeEntries = FloatingWindowRegistry.entries.value.filter { !it.minimized }
+        if (activeEntries.isEmpty() || suppressed) {
+            stopActiveWindowWatcher()
+            return
+        }
+        val pm = context.getSystemService(PowerManager::class.java)
+        val interactive = pm?.isInteractive ?: true
+        val now = System.currentTimeMillis()
+        if (!interactive) {
+            wasScreenOff = true
+            return
+        }
+        if (wasScreenOff) {
+            wasScreenOff = false
+            screenWakeGraceUntilMs = now + 1_500L
+            return
+        }
+        if (now < screenWakeGraceUntilMs) return
+        if (!usageStore.hasUsageAccess()) {
+            stopActiveWindowWatcher()
+            return
+        }
+
+        val usm = context.getSystemService(UsageStatsManager::class.java) ?: return
+        val oldestActiveMs = activeEntries.minOf { it.lastActiveMs }
+        val queryStart = maxOf(oldestActiveMs - 400L, now - 15_000L)
+        val events = runCatching { usm.queryEvents(queryStart, now) }.getOrNull() ?: return
+
+        val activePkgs = activeEntries.mapTo(mutableSetOf()) { it.packageName }
+        val lastResumed = mutableMapOf<String, Long>()
+        val lastStopped = mutableMapOf<String, Long>()
+        val lastPaused = mutableMapOf<String, Long>()
+
+        val resumedType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            UsageEvents.Event.ACTIVITY_RESUMED
+        } else {
+            1
+        }
+        val pausedType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            UsageEvents.Event.ACTIVITY_PAUSED
+        } else {
+            2
+        }
+        val stoppedType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            UsageEvents.Event.ACTIVITY_STOPPED
+        } else {
+            -1
+        }
+
+        val event = UsageEvents.Event()
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+            val pkg = event.packageName ?: continue
+            if (pkg !in activePkgs) continue
+            val ts = event.timeStamp
+            when (event.eventType) {
+                resumedType -> if (ts >= (lastResumed[pkg] ?: 0L)) lastResumed[pkg] = ts
+                pausedType -> if (ts >= (lastPaused[pkg] ?: 0L)) lastPaused[pkg] = ts
+                stoppedType -> if (stoppedType != -1 && ts >= (lastStopped[pkg] ?: 0L)) lastStopped[pkg] = ts
+            }
+        }
+
+        for (entry in activeEntries) {
+            if (now - entry.lastActiveMs < LAUNCH_GRACE_MS) continue
+            val pkg = entry.packageName
+            val resumedTs = lastResumed[pkg] ?: 0L
+            val minimizedDetected = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val stoppedTs = lastStopped[pkg] ?: 0L
+                stoppedTs >= entry.lastActiveMs &&
+                    stoppedTs >= resumedTs &&
+                    (now - stoppedTs) >= STOP_CONFIRM_MS
+            } else {
+                val pausedTs = lastPaused[pkg] ?: 0L
+                pausedTs >= entry.lastActiveMs &&
+                    pausedTs >= resumedTs &&
+                    (now - pausedTs) >= STOP_CONFIRM_MS
+            }
+            if (minimizedDetected) {
+                FloatingWindowRegistry.markMinimized(context, pkg)
+            }
+        }
     }
 
     private fun px(dp: Int): Int = (dp * context.resources.displayMetrics.density.coerceAtLeast(1f)).toInt()
@@ -144,152 +262,21 @@ class FloatingAppBubbleController(
         Prefs.panelStyle(context).visualSpec(light = false).primary.toArgb()
 
     // -------------------------------------------------------------------------
-    // 1. Icono compacto único al lado de — □ × en la barra nativa de la ventana
-    // -------------------------------------------------------------------------
-
-    private fun computeAnchorPosition(active: FloatingAppEntry, hitSize: Int): Pair<Int, Int> {
-        val dm = context.resources.displayMetrics
-        val statusRes = context.resources.getIdentifier("status_bar_height", "dimen", "android")
-        val statusPx = if (statusRes > 0) context.resources.getDimensionPixelSize(statusRes) else px(32)
-        val bounds = active.lastBounds
-        val x = if (bounds != null) {
-            // Espacio libre justo a la izquierda del botón nativo "—" (— □ × ocupan ~124 dp)
-            (bounds.right - px(152)).coerceIn(px(12), (dm.widthPixels - hitSize - px(8)).coerceAtLeast(px(12)))
-        } else {
-            (dm.widthPixels - px(176)).coerceAtLeast(px(12))
-        }
-        val y = if (bounds != null) {
-            (bounds.top + px(3)).coerceIn(px(16), (dm.heightPixels - hitSize - px(24)).coerceAtLeast(px(16)))
-        } else {
-            statusPx + px(8)
-        }
-        return x to y
-    }
-
-    private fun attachCompactWindowButton(active: FloatingAppEntry) {
-        val hitSize = px(36)
-        val (startX, startY) = computeAnchorPosition(active, hitSize)
-
-        val params = WindowManager.LayoutParams(
-            hitSize,
-            hitSize,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = startX
-            y = startY
-        }
-
-        val accent = accentColor()
-        val holder = FrameLayout(context).apply {
-            contentDescription = "Menú de ventanas flotantes de Nexo"
-        }
-
-        val btn = TextView(context).apply {
-            text = "⊞"
-            textSize = 15f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(accent)
-            gravity = Gravity.CENTER
-            includeFontPadding = false
-            elevation = px(4).toFloat()
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.argb(196, 18, 20, 30))
-                setStroke(px(1), accent)
-            }
-        }
-        holder.addView(btn, FrameLayout.LayoutParams(px(28), px(28), Gravity.CENTER))
-
-        val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
-        var startRawX = 0f
-        var startRawY = 0f
-        var downX = 0
-        var downY = 0
-        var dragging = false
-
-        holder.setOnTouchListener { _, event ->
-            val dm = context.resources.displayMetrics
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    startRawX = event.rawX
-                    startRawY = event.rawY
-                    downX = params.x
-                    downY = params.y
-                    dragging = false
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = event.rawX - startRawX
-                    val dy = event.rawY - startRawY
-                    if (!dragging && hypot(dx.toDouble(), dy.toDouble()) > touchSlop) {
-                        dragging = true
-                        topBarCustomPos = true
-                    }
-                    if (dragging) {
-                        params.x = (downX + dx).toInt()
-                            .coerceIn(px(4), (dm.widthPixels - hitSize - px(4)).coerceAtLeast(px(4)))
-                        params.y = (downY + dy).toInt()
-                            .coerceIn(px(16), (dm.heightPixels - hitSize - px(16)).coerceAtLeast(px(16)))
-                        runCatching { wm.updateViewLayout(holder, params) }
-                    }
-                    true
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (!dragging) {
-                        Haptics.perform(context)
-                        onOpenMenu(false)
-                    }
-                    true
-                }
-                else -> false
-            }
-        }
-
-        runCatching {
-            wm.addView(holder, params)
-            topBarRoot = holder
-            topBarParams = params
-            topBarMenuBtn = btn
-        }
-    }
-
-    private fun renderCompactWindowButton(active: FloatingAppEntry) {
-        val accent = accentColor()
-        topBarMenuBtn?.setTextColor(accent)
-        (topBarMenuBtn?.background as? GradientDrawable)?.setStroke(px(1), accent)
-
-        if (!topBarCustomPos) {
-            val root = topBarRoot ?: return
-            val params = topBarParams ?: return
-            val (targetX, targetY) = computeAnchorPosition(active, params.width)
-            if (params.x != targetX || params.y != targetY) {
-                params.x = targetX
-                params.y = targetY
-                runCatching { wm.updateViewLayout(root, params) }
-            }
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // 2. Burbuja flotante apilada en el borde (apps minimizadas)
+    // Burbuja flotante apilada en el borde con indicador superior de menú (2×2)
     // -------------------------------------------------------------------------
 
     private fun attachBubble() {
         val dm = context.resources.displayMetrics
-        val boxPx = px(66)
+        val boxW = px(70)
+        val boxH = px(74)
         val marginPx = px(8)
-        val startX = if (snapRight) dm.widthPixels - boxPx - marginPx else marginPx
+        val startX = if (snapRight) dm.widthPixels - boxW - marginPx else marginPx
         val startY = (dm.heightPixels * savedYRatio).toInt()
-            .coerceIn(px(64), (dm.heightPixels - boxPx - px(110)).coerceAtLeast(px(64)))
+            .coerceIn(px(64), (dm.heightPixels - boxH - px(110)).coerceAtLeast(px(64)))
 
         val params = WindowManager.LayoutParams(
-            boxPx,
-            boxPx,
+            boxW,
+            boxH,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
@@ -304,29 +291,32 @@ class FloatingAppBubbleController(
         val root = FrameLayout(context).apply {
             clipChildren = false
             clipToPadding = false
+            contentDescription = "App minimizada de Nexo. Toca para abrir en flotante, doble toque para menú de ventanas y pantalla dividida."
         }
 
+        // Tarjeta trasera cuando hay varias apps apiladas en la burbuja
         val backCard = View(context).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.argb(200, 34, 38, 54))
-                setStroke(px(1), Color.argb(100, 255, 255, 255))
+                setColor(Color.argb(204, 34, 38, 54))
+                setStroke(px(1), Color.argb(110, 255, 255, 255))
             }
             visibility = View.GONE
         }
         root.addView(
             backCard,
             FrameLayout.LayoutParams(px(46), px(46), Gravity.BOTTOM or Gravity.START).apply {
-                leftMargin = px(4)
-                bottomMargin = px(4)
+                leftMargin = px(6)
+                bottomMargin = px(3)
             }
         )
 
+        // Burbuja circular principal con el icono de la app minimizada
         val ring = FrameLayout(context).apply {
             elevation = px(7).toFloat()
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.argb(236, 18, 20, 30))
+                setColor(Color.argb(238, 18, 20, 30))
                 setStroke(px(2), accentColor())
             }
         }
@@ -341,33 +331,43 @@ class FloatingAppBubbleController(
             }
         }
         ring.addView(iconView, FrameLayout.LayoutParams(px(36), px(36), Gravity.CENTER))
-        root.addView(ring, FrameLayout.LayoutParams(px(54), px(54), Gravity.CENTER))
+        root.addView(
+            ring,
+            FrameLayout.LayoutParams(px(54), px(54), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+                bottomMargin = px(6)
+            }
+        )
 
+        // Indicador pequeño encima de la burbuja: icono 2×2 de ventanas flotantes / pantalla dividida
+        val indicator = View(context).apply {
+            elevation = px(10).toFloat()
+            background = MenuIndicatorDrawable(
+                accentColor = accentColor(),
+                density = context.resources.displayMetrics.density.coerceAtLeast(1f)
+            )
+        }
+        root.addView(
+            indicator,
+            FrameLayout.LayoutParams(px(24), px(16), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                topMargin = px(3)
+            }
+        )
+
+        // Contador de apps minimizadas (abajo a la derecha para nunca chocar con el indicador superior)
         val badge = TextView(context).apply {
-            textSize = 11f
+            textSize = 10.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             includeFontPadding = false
-            elevation = px(9).toFloat()
+            elevation = px(10).toFloat()
             visibility = View.GONE
         }
         root.addView(
             badge,
-            FrameLayout.LayoutParams(px(21), px(21), Gravity.TOP or Gravity.END).apply {
-                topMargin = px(2)
-                marginEnd = px(2)
-            }
-        )
-
-        val dot = View(context).apply {
-            elevation = px(9).toFloat()
-        }
-        root.addView(
-            dot,
-            FrameLayout.LayoutParams(px(12), px(12), Gravity.BOTTOM or Gravity.END).apply {
-                bottomMargin = px(5)
-                marginEnd = px(5)
+            FrameLayout.LayoutParams(px(20), px(20), Gravity.BOTTOM or Gravity.END).apply {
+                bottomMargin = px(3)
+                marginEnd = px(4)
             }
         )
 
@@ -380,8 +380,8 @@ class FloatingAppBubbleController(
             backStackView = backCard
             mainRingView = ring
             appIconView = iconView
+            menuIndicatorView = indicator
             countBadge = badge
-            statusDot = dot
         }
     }
 
@@ -396,6 +396,8 @@ class FloatingAppBubbleController(
         }.getOrNull()
         appIconView?.setImageDrawable(drawable)
 
+        (menuIndicatorView?.background as? MenuIndicatorDrawable)?.updateAccent(accent)
+
         backStackView?.visibility = if (minimized.size > 1) View.VISIBLE else View.GONE
 
         countBadge?.apply {
@@ -405,18 +407,31 @@ class FloatingAppBubbleController(
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
                     setColor(accent)
-                    setStroke(px(1), Color.argb(220, 14, 16, 24))
+                    setStroke(px(1), Color.argb(225, 14, 16, 24))
                 }
             } else {
                 visibility = View.GONE
             }
         }
+    }
 
-        statusDot?.background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(Color.argb(230, 36, 42, 58))
-            setStroke(px(2), accent)
-        }
+    private fun animateBubbleEntrance() {
+        val root = bubbleRoot ?: return
+        root.alpha = 0f
+        root.scaleX = 0.72f
+        root.scaleY = 0.72f
+        root.animate()
+            .alpha(1f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .setDuration(190L)
+            .setInterpolator(DecelerateInterpolator())
+            .start()
+    }
+
+    private fun cancelPendingSingleTap() {
+        pendingSingleTap?.let { handler.removeCallbacks(it) }
+        pendingSingleTap = null
     }
 
     private fun attachBubbleTouchLogic(root: FrameLayout, params: WindowManager.LayoutParams) {
@@ -428,10 +443,12 @@ class FloatingAppBubbleController(
         var dragging = false
         var longPressFired = false
         var hoveringDismiss = false
+        var isSecondTap = false
 
         val longPressRunnable = Runnable {
-            if (!dragging) {
+            if (!dragging && !isSecondTap) {
                 longPressFired = true
+                cancelPendingSingleTap()
                 Haptics.perform(context, strong = true)
                 onOpenMenu(false)
             }
@@ -449,8 +466,17 @@ class FloatingAppBubbleController(
                     dragging = false
                     longPressFired = false
                     hoveringDismiss = false
-                    handler.removeCallbacks(longPressRunnable)
-                    handler.postDelayed(longPressRunnable, 460L)
+
+                    // Si había un toque simple pendiente, este segundo toque es un DOBLE TOQUE
+                    if (pendingSingleTap != null) {
+                        cancelPendingSingleTap()
+                        isSecondTap = true
+                        handler.removeCallbacks(longPressRunnable)
+                    } else {
+                        isSecondTap = false
+                        handler.removeCallbacks(longPressRunnable)
+                        handler.postDelayed(longPressRunnable, LONG_PRESS_TIMEOUT_MS)
+                    }
                     true
                 }
 
@@ -459,6 +485,8 @@ class FloatingAppBubbleController(
                     val dy = event.rawY - startRawY
                     if (!dragging && hypot(dx.toDouble(), dy.toDouble()) > touchSlop) {
                         dragging = true
+                        isSecondTap = false
+                        cancelPendingSingleTap()
                         handler.removeCallbacks(longPressRunnable)
                         showDismissTarget()
                     }
@@ -482,6 +510,7 @@ class FloatingAppBubbleController(
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     handler.removeCallbacks(longPressRunnable)
                     if (dragging) {
+                        isSecondTap = false
                         val shouldDismiss = hoveringDismiss && event.actionMasked == MotionEvent.ACTION_UP
                         hideDismissTarget()
                         if (shouldDismiss) {
@@ -491,7 +520,21 @@ class FloatingAppBubbleController(
                             snapToEdge(root, params)
                         }
                     } else if (!longPressFired && event.actionMasked == MotionEvent.ACTION_UP) {
-                        handleBubbleTap()
+                        if (isSecondTap) {
+                            // Doble toque confirmado: abrir menú de pantallas divididas y ventanas flotantes
+                            isSecondTap = false
+                            handleBubbleDoubleTap(root)
+                        } else {
+                            // Esperar ventana de doble toque; si no llega segundo toque, reabrir en flotante
+                            val singleTapAction = Runnable {
+                                pendingSingleTap = null
+                                handleBubbleSingleTap()
+                            }
+                            pendingSingleTap = singleTapAction
+                            handler.postDelayed(singleTapAction, DOUBLE_TAP_TIMEOUT_MS)
+                        }
+                    } else {
+                        isSecondTap = false
                     }
                     true
                 }
@@ -501,7 +544,7 @@ class FloatingAppBubbleController(
         }
     }
 
-    private fun handleBubbleTap() {
+    private fun handleBubbleSingleTap() {
         Haptics.perform(context)
         val entries = FloatingWindowRegistry.entries.value
         val target = entries.firstOrNull { it.minimized } ?: entries.firstOrNull() ?: return
@@ -511,6 +554,19 @@ class FloatingAppBubbleController(
             bounds = target.lastBounds,
             registerInDock = true
         )
+    }
+
+    private fun handleBubbleDoubleTap(root: FrameLayout) {
+        Haptics.perform(context, strong = true)
+        root.animate()
+            .scaleX(1.12f)
+            .scaleY(1.12f)
+            .setDuration(90L)
+            .withEndAction {
+                root.animate().scaleX(1f).scaleY(1f).setDuration(90L).start()
+            }
+            .start()
+        onOpenMenu(false)
     }
 
     private fun snapToEdge(root: FrameLayout, params: WindowManager.LayoutParams) {
@@ -596,5 +652,101 @@ class FloatingAppBubbleController(
         dismissTarget?.let { runCatching { wm.removeView(it) } }
         dismissTarget = null
         dismissCircle = null
+    }
+
+    /**
+     * Píldora diminuta (24×16 dp) con un icono vectorial 2×2 nítido que se coloca justo encima
+     * de la burbuja para indicar que el doble toque abre el menú de ventanas / pantalla dividida.
+     */
+    private class MenuIndicatorDrawable(
+        private var accentColor: Int,
+        private val density: Float
+    ) : Drawable() {
+
+        private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.argb(242, 16, 18, 28)
+        }
+        private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1.25f * density
+            color = accentColor
+        }
+        private val glyphPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.WHITE
+        }
+        private val accentGlyphPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = accentColor
+        }
+        private val rect = RectF()
+        private val cell = RectF()
+
+        fun updateAccent(newAccent: Int) {
+            if (accentColor == newAccent) return
+            accentColor = newAccent
+            strokePaint.color = newAccent
+            accentGlyphPaint.color = newAccent
+            invalidateSelf()
+        }
+
+        override fun draw(canvas: Canvas) {
+            val b = bounds
+            if (b.isEmpty) return
+            val inset = strokePaint.strokeWidth * 0.5f
+            rect.set(b.left + inset, b.top + inset, b.right - inset, b.bottom - inset)
+            val radius = rect.height() * 0.5f
+            canvas.drawRoundRect(rect, radius, radius, bgPaint)
+            canvas.drawRoundRect(rect, radius, radius, strokePaint)
+
+            // Icono compacto 2×2 centrado (representa pantalla dividida y acoples flotantes)
+            val cellW = 4.2f * density
+            val cellH = 3.2f * density
+            val gap = 1.6f * density
+            val totalW = cellW * 2f + gap
+            val totalH = cellH * 2f + gap
+            val startX = rect.centerX() - totalW * 0.5f
+            val startY = rect.centerY() - totalH * 0.5f
+            val cellR = 0.9f * density
+
+            // Celda superior izquierda (acento)
+            cell.set(startX, startY, startX + cellW, startY + cellH)
+            canvas.drawRoundRect(cell, cellR, cellR, accentGlyphPaint)
+            // Celda superior derecha (blanco)
+            cell.set(startX + cellW + gap, startY, startX + totalW, startY + cellH)
+            canvas.drawRoundRect(cell, cellR, cellR, glyphPaint)
+            // Celda inferior izquierda (blanco)
+            cell.set(startX, startY + cellH + gap, startX + cellW, startY + totalH)
+            canvas.drawRoundRect(cell, cellR, cellR, glyphPaint)
+            // Celda inferior derecha (acento)
+            cell.set(startX + cellW + gap, startY + cellH + gap, startX + totalW, startY + totalH)
+            canvas.drawRoundRect(cell, cellR, cellR, accentGlyphPaint)
+        }
+
+        override fun setAlpha(alpha: Int) {
+            bgPaint.alpha = alpha
+            strokePaint.alpha = alpha
+            glyphPaint.alpha = alpha
+            accentGlyphPaint.alpha = alpha
+        }
+
+        override fun setColorFilter(colorFilter: ColorFilter?) {
+            bgPaint.colorFilter = colorFilter
+            strokePaint.colorFilter = colorFilter
+            glyphPaint.colorFilter = colorFilter
+            accentGlyphPaint.colorFilter = colorFilter
+        }
+
+        @Deprecated("Deprecated in Java")
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+    }
+
+    companion object {
+        private const val WATCHER_POLL_MS = 450L
+        private const val LAUNCH_GRACE_MS = 1_000L
+        private const val STOP_CONFIRM_MS = 400L
+        private const val DOUBLE_TAP_TIMEOUT_MS = 260L
+        private const val LONG_PRESS_TIMEOUT_MS = 520L
     }
 }

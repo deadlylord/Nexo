@@ -26,6 +26,11 @@ import android.widget.Toast
  */
 class SplitScreenService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
+    private val floatingWindowHandler = Handler(Looper.getMainLooper())
+    private val observedWindowIds = mutableMapOf<String, Int>()
+    private val observedOpenPkgs = mutableSetOf<String>()
+    private val pendingMinimizeChecks = mutableMapOf<String, Runnable>()
+    private var lastForegroundPackage: String? = null
     private var secondIntent: Intent? = null
     private var waitingFor: String? = null
     private var fallback: Runnable? = null
@@ -34,6 +39,7 @@ class SplitScreenService : AccessibilityService() {
 
     override fun onServiceConnected() {
         instance = this
+        com.stree.nexo.panel.EdgePanelService.syncFloatingBubble(applicationContext)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -50,15 +56,22 @@ class SplitScreenService : AccessibilityService() {
             }
             return
         }
+        val eventPkg = event.packageName?.toString()
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            !eventPkg.isNullOrBlank() &&
+            eventPkg != "com.android.systemui"
+        ) {
+            lastForegroundPackage = eventPkg
+        }
         // Solo se usa el nombre del paquete y la geometría de ventana (bounds), sin leer contenido.
         if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED ||
             event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         ) {
-            reportFloatingWindowBounds()
+            inspectFloatingWindows(eventPkg)
         }
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val expected = waitingFor ?: return
-        if (event.packageName?.toString() != expected) return
+        if (eventPkg != expected) return
 
         waitingFor = null
         fallback?.let { handler.removeCallbacks(it) }
@@ -67,36 +80,145 @@ class SplitScreenService : AccessibilityService() {
         handler.postDelayed({ proceedToSplit() }, SETTLE_DELAY_MS)
     }
 
-    private fun reportFloatingWindowBounds() {
-        val active = com.stree.nexo.floating.FloatingWindowRegistry.entries.value
-            .firstOrNull { !it.minimized } ?: return
-        val allWindows = runCatching { windows }.getOrNull() ?: return
+    private data class ObservedAppWindow(
+        val id: Int,
+        val title: String,
+        val bounds: android.graphics.Rect,
+        val isFocused: Boolean,
+        val isFreeform: Boolean
+    )
+
+    private fun snapshotAppWindows(): List<ObservedAppWindow> {
+        val allWindows = runCatching { windows }.getOrNull() ?: return emptyList()
         val dm = resources.displayMetrics
+        val minSizePx = (130 * dm.density.coerceAtLeast(1f)).toInt()
         val rect = android.graphics.Rect()
-        var matched: android.graphics.Rect? = null
+        val result = ArrayList<ObservedAppWindow>(allWindows.size)
         for (w in allWindows) {
             if (w.type != android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION) continue
             w.getBoundsInScreen(rect)
-            if (rect.width() <= 0 || rect.height() <= 0) continue
-            // Una ventana flotante (freeform) no ocupa la pantalla completa a la vez en ancho y alto.
+            if (rect.width() < minSizePx || rect.height() < minSizePx) continue
             val isFreeform = rect.width() < (dm.widthPixels * 0.96f) || rect.height() < (dm.heightPixels * 0.90f)
-            if (!isFreeform) continue
-            val titleMatch = w.title?.toString()?.contains(active.label, ignoreCase = true) == true
-            if (titleMatch) {
-                matched = android.graphics.Rect(rect)
-                break
-            }
-            if (matched == null && w.isFocused) {
-                matched = android.graphics.Rect(rect)
-            }
-        }
-        if (matched != null) {
-            com.stree.nexo.floating.FloatingWindowRegistry.updateObservedBounds(
-                applicationContext,
-                active.packageName,
-                matched
+            result.add(
+                ObservedAppWindow(
+                    id = w.id,
+                    title = w.title?.toString().orEmpty(),
+                    bounds = android.graphics.Rect(rect),
+                    isFocused = w.isFocused,
+                    isFreeform = isFreeform
+                )
             )
         }
+        return result
+    }
+
+    private fun inspectFloatingWindows(eventPkg: String?) {
+        val activeEntries = com.stree.nexo.floating.FloatingWindowRegistry.entries.value
+            .filter { !it.minimized }
+        val activePkgs = activeEntries.mapTo(mutableSetOf()) { it.packageName }
+        observedWindowIds.keys.retainAll(activePkgs)
+        observedOpenPkgs.retainAll(activePkgs)
+        pendingMinimizeChecks.entries.removeAll { (pkg, runnable) ->
+            if (pkg !in activePkgs) {
+                floatingWindowHandler.removeCallbacks(runnable)
+                true
+            } else {
+                false
+            }
+        }
+        if (activeEntries.isEmpty()) return
+
+        val appWindows = snapshotAppWindows()
+        val freeform = appWindows.filter { it.isFreeform }
+        val fullscreen = appWindows.filter { !it.isFreeform }
+        val now = System.currentTimeMillis()
+        val usedWindowIds = mutableSetOf<Int>()
+
+        for (entry in activeEntries) {
+            val pkg = entry.packageName
+            val boundId = observedWindowIds[pkg]
+            val match = freeform.firstOrNull { boundId != null && it.id == boundId && it.id !in usedWindowIds }
+                ?: freeform.firstOrNull {
+                    it.id !in usedWindowIds &&
+                        it.title.isNotBlank() &&
+                        it.title.contains(entry.label, ignoreCase = true)
+                }
+                ?: if (activeEntries.size == 1) {
+                    freeform.firstOrNull { it.id !in usedWindowIds && it.isFocused }
+                        ?: freeform.firstOrNull { it.id !in usedWindowIds }
+                } else {
+                    null
+                }
+
+            if (match != null) {
+                usedWindowIds.add(match.id)
+                observedWindowIds[pkg] = match.id
+                observedOpenPkgs.add(pkg)
+                cancelPendingMinimize(pkg)
+                com.stree.nexo.floating.FloatingWindowRegistry.updateObservedBounds(
+                    applicationContext,
+                    pkg,
+                    match.bounds
+                )
+                continue
+            }
+
+            // No vemos su ventana flotante en pantalla: ¿fue maximizada a pantalla completa?
+            val isMaximizedFullscreen = fullscreen.any {
+                (it.title.isNotBlank() && it.title.contains(entry.label, ignoreCase = true)) ||
+                    (it.isFocused && lastForegroundPackage == pkg)
+            }
+            if (isMaximizedFullscreen) {
+                cancelPendingMinimize(pkg)
+                if (pkg in observedOpenPkgs) {
+                    observedOpenPkgs.remove(pkg)
+                    observedWindowIds.remove(pkg)
+                    com.stree.nexo.floating.FloatingWindowRegistry.remove(applicationContext, pkg)
+                }
+                continue
+            }
+
+            // Ignorar transiciones internas de Nexo o lanzamientos todavía en curso
+            if (eventPkg == packageName) continue
+            val wasObserved = pkg in observedOpenPkgs
+            if (!wasObserved && now - entry.lastActiveMs < 1_400L) continue
+
+            scheduleMinimizeConfirmation(pkg)
+        }
+    }
+
+    private fun cancelPendingMinimize(pkg: String) {
+        pendingMinimizeChecks.remove(pkg)?.let { floatingWindowHandler.removeCallbacks(it) }
+    }
+
+    private fun scheduleMinimizeConfirmation(pkg: String) {
+        if (pkg in pendingMinimizeChecks) return
+        val check = Runnable {
+            pendingMinimizeChecks.remove(pkg)
+            val entry = com.stree.nexo.floating.FloatingWindowRegistry.entries.value
+                .firstOrNull { it.packageName == pkg && !it.minimized } ?: return@Runnable
+            val appWindows = snapshotAppWindows()
+            val freeform = appWindows.filter { it.isFreeform }
+            val fullscreen = appWindows.filter { !it.isFreeform }
+            val boundId = observedWindowIds[pkg]
+            val stillFreeform = freeform.any {
+                (boundId != null && it.id == boundId) ||
+                    (it.title.isNotBlank() && it.title.contains(entry.label, ignoreCase = true)) ||
+                    (com.stree.nexo.floating.FloatingWindowRegistry.entries.value.count { e -> !e.minimized } == 1)
+            }
+            if (stillFreeform) return@Runnable
+            val nowFullscreen = fullscreen.any {
+                (it.title.isNotBlank() && it.title.contains(entry.label, ignoreCase = true)) ||
+                    (it.isFocused && lastForegroundPackage == pkg)
+            }
+            if (nowFullscreen) return@Runnable
+
+            observedOpenPkgs.remove(pkg)
+            observedWindowIds.remove(pkg)
+            com.stree.nexo.floating.FloatingWindowRegistry.markMinimized(applicationContext, pkg)
+        }
+        pendingMinimizeChecks[pkg] = check
+        floatingWindowHandler.postDelayed(check, 260L)
     }
 
     /**
@@ -239,8 +361,13 @@ class SplitScreenService : AccessibilityService() {
     override fun onInterrupt() = clearPending()
 
     override fun onDestroy() {
+        floatingWindowHandler.removeCallbacksAndMessages(null)
+        pendingMinimizeChecks.clear()
+        observedWindowIds.clear()
+        observedOpenPkgs.clear()
         clearPending()
         if (instance === this) instance = null
+        EdgePanelService.syncFloatingBubble(applicationContext)
         super.onDestroy()
     }
 

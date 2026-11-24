@@ -89,10 +89,20 @@ object FloatingWindowRegistry {
     }
 
     fun markMinimized(context: Context, packageName: String) {
+        var changed = false
         _entries.update { list ->
-            list.map { if (it.packageName == packageName) it.copy(minimized = true) else it }
+            val target = list.firstOrNull { it.packageName == packageName } ?: return@update list
+            if (target.minimized) return@update list
+            changed = true
+            val updated = target.copy(
+                minimized = true,
+                lastActiveMs = System.currentTimeMillis()
+            )
+            listOf(updated) + list.filterNot { it.packageName == packageName }
         }
-        EdgePanelService.syncFloatingBubble(context)
+        if (changed) {
+            EdgePanelService.syncFloatingBubble(context)
+        }
     }
 
     fun markAllMinimized(context: Context) {
