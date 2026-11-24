@@ -152,6 +152,13 @@ fun SpotlightSearchContent(
 
     val focusRequester = remember { FocusRequester() }
     var actionItem by remember { mutableStateOf<SearchItem?>(null) }
+    var contactSheetItem by remember { mutableStateOf<SearchItem?>(null) }
+    var autoOpenCandidate by remember { mutableStateOf<SearchItem?>(null) }
+    var autoOpenDurationMs by remember { mutableIntStateOf(620) }
+    var cancelledAutoOpenQuery by remember { mutableStateOf<String?>(null) }
+    var lastTriggeredAutoOpenKey by remember { mutableStateOf<String?>(null) }
+    var previousQueryText by remember { mutableStateOf("") }
+    var cameFromVoice by remember { mutableStateOf(false) }
     var widgetRevision by remember { mutableIntStateOf(0) }
     var fullscreenWidgetId by remember { mutableStateOf<String?>(null) }
     var widgetEditMode by remember { mutableStateOf(false) }
@@ -162,7 +169,10 @@ fun SpotlightSearchContent(
     val keyboard = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
     val currentQueryChange by rememberUpdatedState(onQueryChange)
-    val dictation = rememberNexoDictation { spoken -> currentQueryChange(spoken) }
+    val dictation = rememberNexoDictation { spoken ->
+        cameFromVoice = true
+        currentQueryChange(spoken)
+    }
 
     DisposableEffect(owner) {
         var listening = false
@@ -323,6 +333,82 @@ fun SpotlightSearchContent(
         if (query.isEmpty()) null else flatResults.firstOrNull()
     }
 
+    LaunchedEffect(query) {
+        if (query.isEmpty()) {
+            cancelledAutoOpenQuery = null
+            lastTriggeredAutoOpenKey = null
+            autoOpenCandidate = null
+            cameFromVoice = false
+        }
+        previousQueryText = query
+    }
+
+    val currentItemClick by rememberUpdatedState(onItemClick)
+    LaunchedEffect(
+        query,
+        flatResults,
+        dictation.listening,
+        cameFromVoice,
+        contactSheetItem,
+        actionItem,
+        fullscreenWidgetId,
+        cancelledAutoOpenQuery
+    ) {
+        if (!Prefs.spotlightAutoOpen(context) ||
+            query.isEmpty() ||
+            contactSheetItem != null ||
+            actionItem != null ||
+            fullscreenWidgetId != null ||
+            cancelledAutoOpenQuery == query
+        ) {
+            autoOpenCandidate = null
+            return@LaunchedEffect
+        }
+
+        val match = resolveSpotlightAutoMatch(
+            query = query,
+            results = flatResults,
+            looksLikeUrl = looksLikeUrl,
+            mathResult = mathResult
+        )
+        if (match == null) {
+            autoOpenCandidate = null
+            return@LaunchedEffect
+        }
+
+        val triggerKey = "${match.id}|${com.stree.nexo.search.SearchEngine.normalize(query)}"
+        if (triggerKey == lastTriggeredAutoOpenKey) {
+            autoOpenCandidate = null
+            return@LaunchedEffect
+        }
+
+        val delayMs = when {
+            dictation.listening -> 780
+            cameFromVoice -> 340
+            else -> 620
+        }
+        autoOpenDurationMs = delayMs
+        autoOpenCandidate = match
+
+        delay(delayMs.toLong())
+
+        if (autoOpenCandidate?.id != match.id || cancelledAutoOpenQuery == query) return@LaunchedEffect
+
+        lastTriggeredAutoOpenKey = triggerKey
+        autoOpenCandidate = null
+        dictation.stop()
+        keyboard?.hide()
+        focusManager.clearFocus()
+
+        if (match.type == ItemType.CONTACT) {
+            Haptics.perform(context)
+            contactSheetItem = match
+        } else {
+            currentQueryChange("")
+            currentItemClick(match)
+        }
+    }
+
     val launchWebSearch: () -> Unit = {
         if (query.isNotEmpty()) {
             Haptics.perform(context)
@@ -425,7 +511,18 @@ fun SpotlightSearchContent(
                         }
                         BasicTextField(
                             value = state.query,
-                            onValueChange = onQueryChange,
+                            onValueChange = { updated ->
+                                cameFromVoice = false
+                                val trimmedNew = updated.trim()
+                                val trimmedOld = previousQueryText.trim()
+                                if (trimmedNew.isNotEmpty() &&
+                                    trimmedNew.length < trimmedOld.length &&
+                                    trimmedOld.startsWith(trimmedNew, ignoreCase = true)
+                                ) {
+                                    cancelledAutoOpenQuery = trimmedNew
+                                }
+                                onQueryChange(updated)
+                            },
                             singleLine = true,
                             textStyle = TextStyle(
                                 color = primaryTextColor,
@@ -436,7 +533,13 @@ fun SpotlightSearchContent(
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(
                                 onSearch = {
+                                    autoOpenCandidate = null
                                     when {
+                                        topHit != null && topHit.type == ItemType.CONTACT -> {
+                                            keyboard?.hide()
+                                            focusManager.clearFocus()
+                                            contactSheetItem = topHit
+                                        }
                                         topHit != null -> onItemClick(topHit)
                                         looksLikeUrl -> launchUrl()
                                         query.isNotEmpty() -> launchWebSearch()
@@ -513,6 +616,24 @@ fun SpotlightSearchContent(
                     )
                 }
             }
+        }
+
+        autoOpenCandidate?.let { candidate ->
+            SpotlightAutoOpenBanner(
+                item = candidate,
+                durationMs = autoOpenDurationMs,
+                accentColor = spec.primary,
+                cardColor = cardColor,
+                cardBorder = cardBorder,
+                primaryTextColor = primaryTextColor,
+                mutedTextColor = mutedTextColor,
+                onCancel = {
+                    Haptics.perform(context)
+                    cancelledAutoOpenQuery = query
+                    autoOpenCandidate = null
+                },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+            )
         }
 
         if (query.isEmpty()) {
@@ -868,13 +989,28 @@ fun SpotlightSearchContent(
                                 textColor = primaryTextColor,
                                 subtitleColor = mutedTextColor,
                                 accentColor = spec.primary,
-                                onClick = { onItemClick(topHit) },
+                                onClick = {
+                                    autoOpenCandidate = null
+                                    dictation.stop()
+                                    if (topHit.type == ItemType.CONTACT) {
+                                        Haptics.perform(context)
+                                        keyboard?.hide()
+                                        focusManager.clearFocus()
+                                        contactSheetItem = topHit
+                                    } else {
+                                        onItemClick(topHit)
+                                    }
+                                },
                                 onLongClick = {
                                     Haptics.perform(context, strong = true)
                                     actionItem = topHit
                                 },
                                 onFloatingClick = if (ItemLauncher.canOpenFloating(topHit)) {
-                                    { onOpenFloating(topHit) }
+                                    {
+                                        autoOpenCandidate = null
+                                        dictation.stop()
+                                        onOpenFloating(topHit)
+                                    }
                                 } else null
                             )
                         }
@@ -907,13 +1043,28 @@ fun SpotlightSearchContent(
                                             textColor = primaryTextColor,
                                             subtitleColor = mutedTextColor,
                                             accentColor = spec.primary,
-                                            onClick = { onItemClick(item) },
+                                            onClick = {
+                                                autoOpenCandidate = null
+                                                dictation.stop()
+                                                if (item.type == ItemType.CONTACT) {
+                                                    Haptics.perform(context)
+                                                    keyboard?.hide()
+                                                    focusManager.clearFocus()
+                                                    contactSheetItem = item
+                                                } else {
+                                                    onItemClick(item)
+                                                }
+                                            },
                                             onLongClick = {
                                                 Haptics.perform(context, strong = true)
                                                 actionItem = item
                                             },
                                             onFloatingClick = if (ItemLauncher.canOpenFloating(item)) {
-                                                { onOpenFloating(item) }
+                                                {
+                                                    autoOpenCandidate = null
+                                                    dictation.stop()
+                                                    onOpenFloating(item)
+                                                }
                                             } else null
                                         )
                                     }
@@ -1101,6 +1252,28 @@ fun SpotlightSearchContent(
             confirmButton = {
                 TextButton(onClick = { actionItem = null }) { Text("Cerrar") }
             }
+        )
+    }
+
+    contactSheetItem?.let { contact ->
+        SpotlightContactSheet(
+            contact = contact,
+            isPinned = contact.id in state.pinnedIds,
+            accentColor = spec.primary,
+            surfaceColor = if (overlayStyle) spec.surface.copy(alpha = 0.96f) else MaterialTheme.colorScheme.surface,
+            borderColor = cardBorder,
+            primaryTextColor = primaryTextColor,
+            mutedTextColor = mutedTextColor,
+            onCall = {
+                onQueryChange("")
+                onItemClick(contact)
+            },
+            onTogglePin = { onTogglePin(contact) },
+            onActionCompleted = {
+                onQueryChange("")
+                onCancel?.invoke()
+            },
+            onDismiss = { contactSheetItem = null }
         )
     }
 }

@@ -826,6 +826,44 @@ private fun PanelHeroCard(
                 }
             }
 
+            Spacer(Modifier.height(10.dp))
+
+            // Apertura automática en Spotlight al coincidir app o contacto
+            var spotlightAutoOpen by remember { mutableStateOf(Prefs.spotlightAutoOpen(context)) }
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "Apertura automática en Spotlight",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Abre automáticamente la app o la ficha del contacto al coincidir por voz o teclado",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = spotlightAutoOpen,
+                        onCheckedChange = { enabled ->
+                            Haptics.perform(context)
+                            spotlightAutoOpen = enabled
+                            Prefs.setSpotlightAutoOpen(context, enabled)
+                        }
+                    )
+                }
+            }
+
             Spacer(Modifier.height(12.dp))
 
             // Estado de permisos clave del servicio en segundo plano
