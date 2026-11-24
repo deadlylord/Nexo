@@ -232,6 +232,22 @@ class SplitScreenService : AccessibilityService() {
             }.getOrDefault(false)
         }
 
+        fun performToggleSplitScreen(): Boolean =
+            runCatching { instance?.performGlobalAction(GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN) == true }.getOrDefault(false)
+
+        fun launchSplitPair(context: Context, firstPackage: String, secondPackage: String): Boolean {
+            if (instance != null) {
+                return launch(context, firstPackage, secondPackage)
+            }
+            return com.stree.nexo.SplitScreenActivity.launch(
+                context = context,
+                firstPackage = firstPackage,
+                firstClass = null,
+                secondPackage = secondPackage,
+                secondClass = null
+            )
+        }
+
         fun launch(context: Context, firstPackage: String, secondPackage: String): Boolean {
             val first = context.packageManager.getLaunchIntentForPackage(firstPackage) ?: return false
             val second = context.packageManager.getLaunchIntentForPackage(secondPackage) ?: return false

@@ -10,6 +10,7 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -19,36 +20,50 @@ import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.compose.ui.graphics.toArgb
 import com.stree.nexo.data.Haptics
 import com.stree.nexo.data.PanelSide
 import com.stree.nexo.data.Prefs
+import com.stree.nexo.panel.EdgePanelService
 import com.stree.nexo.search.ItemLauncher
 import com.stree.nexo.ui.theme.visualSpec
 import kotlin.math.hypot
 
 /**
- * Burbuja flotante apilada (estilo Messenger / One UI) para controlar apps abiertas
- * o minimizadas en ventana flotante desde Nexo.
+ * Controlador de overlays para ventanas flotantes:
+ * 1. Barra superior profesional sobre la ventana flotante activa (Menú flotante,
+ *    Pantalla dividida, Minimizar a burbuja, Maximizar y ✕ Cerrar definitivamente).
+ * 2. Burbuja flotante apilada en el borde cuando la app está minimizada (un toque la
+ *    reabre directo en ventana flotante; arrastrar a ✕ inferior limpia las burbujas).
  */
 class FloatingAppBubbleController(
     private val context: Context,
-    private val onOpenMenu: () -> Unit
+    private val onOpenMenu: (startSplit: Boolean) -> Unit
 ) {
     private val wm = context.getSystemService(WindowManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
 
+    // Burbuja lateral (apps minimizadas)
     private var bubbleRoot: FrameLayout? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var dismissTarget: FrameLayout? = null
     private var dismissCircle: TextView? = null
-
     private var backStackView: View? = null
     private var mainRingView: FrameLayout? = null
     private var appIconView: ImageView? = null
     private var countBadge: TextView? = null
     private var statusDot: View? = null
+
+    // Barra superior de la ventana flotante activa
+    private var topBarRoot: LinearLayout? = null
+    private var topBarParams: WindowManager.LayoutParams? = null
+    private var topBarIcon: ImageView? = null
+    private var topBarTitle: TextView? = null
+    private var topBarMenuBtn: TextView? = null
+    private var topBarActivePkg: String? = null
+    private var topBarCustomPos = false
 
     private var snapRight: Boolean = Prefs.panelSide(context) == PanelSide.END
     private var savedYRatio: Float = 0.36f
@@ -67,16 +82,44 @@ class FloatingAppBubbleController(
             hide()
             return
         }
-        if (bubbleRoot == null) {
-            attachBubble()
+
+        val activeEntry = entries.firstOrNull { !it.minimized }
+        val minimizedEntries = entries.filter { it.minimized }
+
+        // Barra superior visible siempre que haya una app abierta en ventana flotante
+        if (activeEntry != null) {
+            if (topBarActivePkg != activeEntry.packageName) {
+                topBarActivePkg = activeEntry.packageName
+                topBarCustomPos = false
+            }
+            if (topBarRoot == null) {
+                attachTopBar(activeEntry)
+            }
+            renderTopBar(activeEntry, entries.size)
+        } else {
+            hideTopBar()
         }
-        renderEntries(entries)
+
+        // Burbuja circular visible para apps minimizadas
+        if (minimizedEntries.isNotEmpty()) {
+            if (bubbleRoot == null) {
+                attachBubble()
+            }
+            renderBubble(minimizedEntries)
+        } else {
+            hideBubbleOnly()
+        }
     }
 
     fun hide() {
         snapAnimator?.cancel()
         snapAnimator = null
         handler.removeCallbacksAndMessages(null)
+        hideTopBar()
+        hideBubbleOnly()
+    }
+
+    private fun hideBubbleOnly() {
         hideDismissTarget()
         bubbleRoot?.let { runCatching { wm.removeView(it) } }
         bubbleRoot = null
@@ -88,10 +131,272 @@ class FloatingAppBubbleController(
         statusDot = null
     }
 
+    private fun hideTopBar() {
+        topBarRoot?.let { runCatching { wm.removeView(it) } }
+        topBarRoot = null
+        topBarParams = null
+        topBarIcon = null
+        topBarTitle = null
+        topBarMenuBtn = null
+        topBarActivePkg = null
+        topBarCustomPos = false
+    }
+
     private fun px(dp: Int): Int = (dp * context.resources.displayMetrics.density.coerceAtLeast(1f)).toInt()
 
     private fun accentColor(): Int =
         Prefs.panelStyle(context).visualSpec(light = false).primary.toArgb()
+
+    // -------------------------------------------------------------------------
+    // 1. Barra superior profesional para la app en ventana flotante
+    // -------------------------------------------------------------------------
+
+    private fun attachTopBar(active: FloatingAppEntry) {
+        val dm = context.resources.displayMetrics
+        val barWidth = (dm.widthPixels * 0.86f).toInt().coerceIn(px(268), px(380))
+        val barHeight = px(40)
+        val statusRes = context.resources.getIdentifier("status_bar_height", "dimen", "android")
+        val statusPx = if (statusRes > 0) context.resources.getDimensionPixelSize(statusRes) else px(32)
+
+        val defaultY = active.lastBounds?.let { (it.top - barHeight - px(6)).coerceAtLeast(statusPx + px(4)) }
+            ?: (statusPx + px(8))
+        val defaultX = ((dm.widthPixels - barWidth) / 2).coerceAtLeast(px(8))
+
+        val params = WindowManager.LayoutParams(
+            barWidth,
+            barHeight,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = defaultX
+            y = defaultY
+        }
+
+        val bar = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(px(8), px(4), px(6), px(4))
+            elevation = px(8).toFloat()
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = px(20).toFloat()
+                setColor(Color.argb(238, 18, 20, 30))
+                setStroke(px(1), accentColor())
+            }
+        }
+
+        // Zona izquierda arrastrable: icono + nombre de la app flotante
+        val dragZone = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(px(2), 0, px(6), 0)
+        }
+
+        val iconView = ImageView(context).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            clipToOutline = true
+            outlineProvider = object : ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: Outline) {
+                    outline.setRoundRect(0, 0, view.width, view.height, px(6).toFloat())
+                }
+            }
+        }
+        dragZone.addView(iconView, LinearLayout.LayoutParams(px(22), px(22)).apply {
+            marginEnd = px(6)
+        })
+
+        val titleView = TextView(context).apply {
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        dragZone.addView(titleView, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+        attachTopBarDrag(dragZone, bar, params)
+        bar.addView(dragZone, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+
+        fun makeActionButton(
+            symbol: String,
+            desc: String,
+            tint: Int = Color.WHITE,
+            bgColor: Int = Color.TRANSPARENT,
+            onClick: () -> Unit
+        ): TextView = TextView(context).apply {
+            text = symbol
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(tint)
+            contentDescription = desc
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(bgColor)
+            }
+            setOnClickListener {
+                Haptics.perform(context)
+                onClick()
+            }
+        }
+
+        val btnLp = {
+            LinearLayout.LayoutParams(px(30), px(30)).apply {
+                marginStart = px(3)
+            }
+        }
+
+        // 1. Menú de ventanas flotantes y layouts
+        val menuBtn = makeActionButton(
+            symbol = "⊞",
+            desc = "Menú de ventanas flotantes",
+            tint = accentColor(),
+            bgColor = Color.argb(46, Color.red(accentColor()), Color.green(accentColor()), Color.blue(accentColor()))
+        ) {
+            onOpenMenu(false)
+        }
+        bar.addView(menuBtn, btnLp())
+
+        // 2. Pantalla dividida
+        val splitBtn = makeActionButton(
+            symbol = "◫",
+            desc = "Pantalla dividida",
+            tint = Color.WHITE,
+            bgColor = Color.argb(30, 255, 255, 255)
+        ) {
+            val all = FloatingWindowRegistry.entries.value
+            val current = all.firstOrNull { !it.minimized } ?: all.firstOrNull() ?: return@makeActionButton
+            val second = all.firstOrNull { it.packageName != current.packageName }
+            if (second != null) {
+                FloatingWindowRegistry.openSplitScreen(context, current.packageName, second.packageName)
+            } else {
+                onOpenMenu(true)
+            }
+        }
+        bar.addView(splitBtn, btnLp())
+
+        // 3. Minimizar a burbuja
+        val minBtn = makeActionButton(
+            symbol = "—",
+            desc = "Minimizar a burbuja",
+            tint = Color.WHITE,
+            bgColor = Color.argb(30, 255, 255, 255)
+        ) {
+            val current = FloatingWindowRegistry.entries.value.firstOrNull { !it.minimized }
+                ?: FloatingWindowRegistry.entries.value.firstOrNull()
+                ?: return@makeActionButton
+            FloatingWindowRegistry.markMinimized(context, current.packageName)
+            EdgePanelService.minimizeToBackground(context)
+        }
+        bar.addView(minBtn, btnLp())
+
+        // 4. Maximizar a pantalla completa
+        val maxBtn = makeActionButton(
+            symbol = "⤢",
+            desc = "Maximizar",
+            tint = Color.WHITE,
+            bgColor = Color.argb(30, 255, 255, 255)
+        ) {
+            val current = FloatingWindowRegistry.entries.value.firstOrNull { !it.minimized }
+                ?: FloatingWindowRegistry.entries.value.firstOrNull()
+                ?: return@makeActionButton
+            FloatingWindowRegistry.remove(context, current.packageName)
+            ItemLauncher.launchPackageFullscreen(context, current.packageName)
+        }
+        bar.addView(maxBtn, btnLp())
+
+        // 5. Cerrar definitivamente (X)
+        val closeBtn = makeActionButton(
+            symbol = "✕",
+            desc = "Cerrar ventana definitivamente",
+            tint = Color.rgb(251, 113, 133),
+            bgColor = Color.argb(45, 251, 113, 133)
+        ) {
+            Haptics.perform(context, strong = true)
+            val current = FloatingWindowRegistry.entries.value.firstOrNull { !it.minimized }
+                ?: FloatingWindowRegistry.entries.value.firstOrNull()
+                ?: return@makeActionButton
+            FloatingWindowRegistry.closeAppDefinitively(context, current.packageName)
+        }
+        bar.addView(closeBtn, btnLp())
+
+        runCatching {
+            wm.addView(bar, params)
+            topBarRoot = bar
+            topBarParams = params
+            topBarIcon = iconView
+            topBarTitle = titleView
+            topBarMenuBtn = menuBtn
+        }
+    }
+
+    private fun renderTopBar(active: FloatingAppEntry, totalCount: Int) {
+        val accent = accentColor()
+        (topBarRoot?.background as? GradientDrawable)?.setStroke(px(1), accent)
+        topBarMenuBtn?.setTextColor(accent)
+        (topBarMenuBtn?.background as? GradientDrawable)?.setColor(
+            Color.argb(46, Color.red(accent), Color.green(accent), Color.blue(accent))
+        )
+
+        val drawable = runCatching {
+            context.packageManager.getApplicationIcon(active.packageName)
+        }.getOrNull()
+        topBarIcon?.setImageDrawable(drawable)
+        topBarTitle?.text = if (totalCount > 1) "${active.label} ($totalCount)" else active.label
+
+        if (!topBarCustomPos) {
+            val root = topBarRoot ?: return
+            val params = topBarParams ?: return
+            val dm = context.resources.displayMetrics
+            val statusRes = context.resources.getIdentifier("status_bar_height", "dimen", "android")
+            val statusPx = if (statusRes > 0) context.resources.getDimensionPixelSize(statusRes) else px(32)
+            val targetY = active.lastBounds?.let { (it.top - params.height - px(6)).coerceAtLeast(statusPx + px(4)) }
+                ?: (statusPx + px(8))
+            val targetX = ((dm.widthPixels - params.width) / 2).coerceAtLeast(px(8))
+            if (params.x != targetX || params.y != targetY) {
+                params.x = targetX
+                params.y = targetY
+                runCatching { wm.updateViewLayout(root, params) }
+            }
+        }
+    }
+
+    private fun attachTopBarDrag(handle: View, root: View, params: WindowManager.LayoutParams) {
+        var startRawX = 0f
+        var startRawY = 0f
+        var startX = 0
+        var startY = 0
+        handle.setOnTouchListener { _, event ->
+            val dm = context.resources.displayMetrics
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startRawX = event.rawX
+                    startRawY = event.rawY
+                    startX = params.x
+                    startY = params.y
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    topBarCustomPos = true
+                    params.x = (startX + event.rawX - startRawX).toInt()
+                        .coerceIn(px(4), (dm.widthPixels - params.width - px(4)).coerceAtLeast(px(4)))
+                    params.y = (startY + event.rawY - startRawY).toInt()
+                        .coerceIn(px(28), (dm.heightPixels - params.height - px(24)).coerceAtLeast(px(28)))
+                    runCatching { wm.updateViewLayout(root, params) }
+                    true
+                }
+                else -> true
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. Burbuja flotante apilada en el borde (apps minimizadas)
+    // -------------------------------------------------------------------------
 
     private fun attachBubble() {
         val dm = context.resources.displayMetrics
@@ -185,7 +490,7 @@ class FloatingAppBubbleController(
             }
         )
 
-        attachTouchLogic(root, params)
+        attachBubbleTouchLogic(root, params)
 
         runCatching {
             wm.addView(root, params)
@@ -199,8 +504,8 @@ class FloatingAppBubbleController(
         }
     }
 
-    private fun renderEntries(entries: List<FloatingAppEntry>) {
-        val top = entries.firstOrNull() ?: return
+    private fun renderBubble(minimized: List<FloatingAppEntry>) {
+        val top = minimized.firstOrNull() ?: return
         val accent = accentColor()
 
         (mainRingView?.background as? GradientDrawable)?.setStroke(px(2), accent)
@@ -210,12 +515,12 @@ class FloatingAppBubbleController(
         }.getOrNull()
         appIconView?.setImageDrawable(drawable)
 
-        backStackView?.visibility = if (entries.size > 1) View.VISIBLE else View.GONE
+        backStackView?.visibility = if (minimized.size > 1) View.VISIBLE else View.GONE
 
         countBadge?.apply {
-            if (entries.size > 1) {
+            if (minimized.size > 1) {
                 visibility = View.VISIBLE
-                text = entries.size.toString()
+                text = minimized.size.toString()
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
                     setColor(accent)
@@ -226,20 +531,14 @@ class FloatingAppBubbleController(
             }
         }
 
-        val anyOpen = entries.any { !it.minimized }
         statusDot?.background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            if (anyOpen) {
-                setColor(Color.rgb(52, 211, 153))
-                setStroke(px(2), Color.argb(235, 16, 18, 28))
-            } else {
-                setColor(Color.argb(230, 36, 42, 58))
-                setStroke(px(2), accent)
-            }
+            setColor(Color.argb(230, 36, 42, 58))
+            setStroke(px(2), accent)
         }
     }
 
-    private fun attachTouchLogic(root: FrameLayout, params: WindowManager.LayoutParams) {
+    private fun attachBubbleTouchLogic(root: FrameLayout, params: WindowManager.LayoutParams) {
         val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
         var startRawX = 0f
         var startRawY = 0f
@@ -253,7 +552,7 @@ class FloatingAppBubbleController(
             if (!dragging) {
                 longPressFired = true
                 Haptics.perform(context, strong = true)
-                onOpenMenu()
+                onOpenMenu(false)
             }
         }
 
@@ -323,11 +622,12 @@ class FloatingAppBubbleController(
 
     private fun handleBubbleTap() {
         Haptics.perform(context)
-        val top = FloatingWindowRegistry.entries.value.firstOrNull() ?: return
+        val entries = FloatingWindowRegistry.entries.value
+        val target = entries.firstOrNull { it.minimized } ?: entries.firstOrNull() ?: return
         ItemLauncher.launchPackageFloatingInBounds(
             context = context,
-            packageName = top.packageName,
-            bounds = top.lastBounds,
+            packageName = target.packageName,
+            bounds = target.lastBounds,
             registerInDock = true
         )
     }

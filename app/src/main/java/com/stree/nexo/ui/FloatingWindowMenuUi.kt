@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Minimize
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Splitscreen
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -84,10 +85,12 @@ fun FloatingWindowMenuContent(
     entries: List<FloatingAppEntry>,
     activeLayout: FloatingDockLayout,
     availableApps: List<SearchItem>,
+    initialSplitMode: Boolean = false,
     onMinimizeApp: (String) -> Unit,
     onMinimizeAll: () -> Unit,
     onFocusApp: (FloatingAppEntry) -> Unit,
     onMaximizeApp: (String) -> Unit,
+    onSplitScreen: (firstPackage: String, secondPackage: String?) -> Unit,
     onRemoveApp: (String) -> Unit,
     onClearAll: () -> Unit,
     onMoveSlot: (Int, Int) -> Unit,
@@ -102,7 +105,8 @@ fun FloatingWindowMenuContent(
     val shape = RoundedCornerShape(28.dp)
 
     var selectedPkg by remember { mutableStateOf(entries.firstOrNull()?.packageName) }
-    var showAppPicker by remember { mutableStateOf(entries.isEmpty()) }
+    var pickingForSplit by remember { mutableStateOf(initialSplitMode && entries.isNotEmpty()) }
+    var showAppPicker by remember { mutableStateOf(entries.isEmpty() || (initialSplitMode && entries.isNotEmpty())) }
     var pendingLayout by remember { mutableStateOf<FloatingDockLayout?>(null) }
     var pickerQuery by remember { mutableStateOf("") }
 
@@ -114,11 +118,14 @@ fun FloatingWindowMenuContent(
 
     val selectedEntry = entries.firstOrNull { it.packageName == selectedPkg } ?: entries.firstOrNull()
     val trackedPackages = remember(entries) { entries.map { it.packageName }.toSet() }
-    val filteredApps = remember(availableApps, pickerQuery, trackedPackages) {
+    val filteredApps = remember(availableApps, pickerQuery, trackedPackages, pickingForSplit, selectedEntry?.packageName) {
         val q = pickerQuery.trim()
         availableApps
             .filter { it.type == ItemType.APP && !it.packageName.isNullOrBlank() }
-            .filter { it.packageName !in trackedPackages }
+            .filter {
+                if (pickingForSplit) it.packageName != selectedEntry?.packageName
+                else it.packageName !in trackedPackages
+            }
             .filter { q.isEmpty() || it.title.contains(q, ignoreCase = true) }
             .take(40)
     }
@@ -307,7 +314,7 @@ fun FloatingWindowMenuContent(
             if (selectedEntry != null) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     WindowActionPill(
                         icon = Icons.Filled.Minimize,
@@ -334,6 +341,25 @@ fun FloatingWindowMenuContent(
                         }
                     )
                     WindowActionPill(
+                        icon = Icons.Filled.Splitscreen,
+                        label = "Dividir",
+                        tint = Color(0xFF38BDF8),
+                        textColor = spec.onSurface,
+                        bgColor = if (pickingForSplit) spec.primary.copy(alpha = 0.24f) else spec.surfaceVariant.copy(alpha = 0.58f),
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            Haptics.perform(context)
+                            val second = entries.firstOrNull { it.packageName != selectedEntry.packageName }
+                            if (second != null) {
+                                onSplitScreen(selectedEntry.packageName, second.packageName)
+                            } else {
+                                pendingLayout = null
+                                pickingForSplit = true
+                                showAppPicker = true
+                            }
+                        }
+                    )
+                    WindowActionPill(
                         icon = Icons.Filled.Fullscreen,
                         label = "Maximizar",
                         tint = spec.onSurface,
@@ -347,13 +373,13 @@ fun FloatingWindowMenuContent(
                     )
                     WindowActionPill(
                         icon = Icons.Filled.Close,
-                        label = "Quitar",
+                        label = "Cerrar",
                         tint = Color(0xFFFB7185),
                         textColor = spec.onSurface,
                         bgColor = spec.surfaceVariant.copy(alpha = 0.58f),
                         modifier = Modifier.weight(1f),
                         onClick = {
-                            Haptics.perform(context)
+                            Haptics.perform(context, strong = true)
                             onRemoveApp(selectedEntry.packageName)
                         }
                     )
@@ -403,6 +429,7 @@ fun FloatingWindowMenuContent(
                                 modifier = Modifier.weight(1f),
                                 onClick = {
                                     Haptics.perform(context)
+                                    pickingForSplit = false
                                     if (entries.size >= layout.minApps) {
                                         pendingLayout = null
                                         onApplyLayout(layout)
@@ -417,7 +444,7 @@ fun FloatingWindowMenuContent(
                 }
             }
 
-            // 5. Selector rápido inline para "+ Añadir app" o completar slots de un layout
+            // 5. Selector rápido inline para "+ Añadir app", pantalla dividida o completar slots de un layout
             AnimatedVisibility(visible = showAppPicker) {
                 Column(
                     modifier = Modifier
@@ -429,22 +456,45 @@ fun FloatingWindowMenuContent(
                 ) {
                     val targetLayout = pendingLayout
                     val missing = targetLayout?.let { (it.minApps - entries.size).coerceAtLeast(1) }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
-                            text = if (targetLayout != null && missing != null) {
-                                "Elige $missing app${if (missing > 1) "s" else ""} más para ${targetLayout.label}"
-                            } else {
-                                "Añadir app al espacio flotante"
+                            text = when {
+                                pickingForSplit && selectedEntry != null ->
+                                    "Elige la 2ª app para dividir con ${selectedEntry.label}"
+                                targetLayout != null && missing != null ->
+                                    "Elige $missing app${if (missing > 1) "s" else ""} más para ${targetLayout.label}"
+                                else -> "Añadir app al espacio flotante"
                             },
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = spec.primary,
                             modifier = Modifier.weight(1f)
                         )
+                        if (pickingForSplit && selectedEntry != null) {
+                            Surface(
+                                onClick = {
+                                    Haptics.perform(context)
+                                    pickingForSplit = false
+                                    showAppPicker = false
+                                    onSplitScreen(selectedEntry.packageName, null)
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                color = spec.primary.copy(alpha = 0.2f)
+                            ) {
+                                Text(
+                                    text = "Dividir ya",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = spec.primary,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
                         IconButton(
                             onClick = {
                                 showAppPicker = false
                                 pendingLayout = null
+                                pickingForSplit = false
                             },
                             modifier = Modifier.size(26.dp)
                         ) {
@@ -520,14 +570,21 @@ fun FloatingWindowMenuContent(
                                     .clip(RoundedCornerShape(12.dp))
                                     .clickable {
                                         Haptics.perform(context)
-                                        val nextCount = entries.size + 1
-                                        val readyLayout = pendingLayout?.takeIf { nextCount >= it.minApps }
-                                        val keepOpen = pendingLayout != null && readyLayout == null
-                                        onAddApp(pkg, readyLayout, keepOpen)
-                                        pickerQuery = ""
-                                        if (!keepOpen) {
-                                            pendingLayout = null
+                                        if (pickingForSplit && selectedEntry != null) {
+                                            pickingForSplit = false
                                             showAppPicker = false
+                                            pickerQuery = ""
+                                            onSplitScreen(selectedEntry.packageName, pkg)
+                                        } else {
+                                            val nextCount = entries.size + 1
+                                            val readyLayout = pendingLayout?.takeIf { nextCount >= it.minApps }
+                                            val keepOpen = pendingLayout != null && readyLayout == null
+                                            onAddApp(pkg, readyLayout, keepOpen)
+                                            pickerQuery = ""
+                                            if (!keepOpen) {
+                                                pendingLayout = null
+                                                showAppPicker = false
+                                            }
                                         }
                                     }
                                     .padding(vertical = 6.dp, horizontal = 2.dp),

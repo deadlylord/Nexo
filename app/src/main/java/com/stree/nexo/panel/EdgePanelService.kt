@@ -79,7 +79,7 @@ import kotlin.math.abs
 class EdgePanelService : Service() {
     private val floatingWidget by lazy { com.stree.nexo.widget.FloatingWidgetController(this) }
     private val floatingBubble by lazy {
-        FloatingAppBubbleController(this) { openFloatingWindowMenu() }
+        FloatingAppBubbleController(this) { startSplit -> openFloatingWindowMenu(startSplit) }
     }
 
     private lateinit var windowManager: WindowManager
@@ -1621,10 +1621,11 @@ class EdgePanelService : Service() {
         }
     }
 
-    private fun openFloatingWindowMenu() {
+    private fun openFloatingWindowMenu(startSplit: Boolean = false) {
         Haptics.perform(this)
         startOverlayActivity(
             Intent(this, FloatingWindowMenuActivity::class.java).apply {
+                if (startSplit) putExtra(FloatingWindowMenuActivity.EXTRA_START_SPLIT, true)
                 addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
                 addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
             }

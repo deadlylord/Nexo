@@ -70,6 +70,7 @@ class FloatingWindowMenuActivity : ComponentActivity() {
             }
         }
 
+        val startInSplitMode = intent.getBooleanExtra(EXTRA_START_SPLIT, false)
         EdgePanelService.setPanelOpen(true)
 
         setContent {
@@ -149,6 +150,7 @@ class FloatingWindowMenuActivity : ComponentActivity() {
                                 entries = entries,
                                 activeLayout = activeLayout,
                                 availableApps = orderedApps,
+                                initialSplitMode = startInSplitMode,
                                 onMinimizeApp = { pkg ->
                                     FloatingWindowRegistry.markMinimized(this@FloatingWindowMenuActivity, pkg)
                                     EdgePanelService.minimizeToBackground(this@FloatingWindowMenuActivity)
@@ -175,14 +177,23 @@ class FloatingWindowMenuActivity : ComponentActivity() {
                                     }
                                     dismiss()
                                 },
+                                onSplitScreen = { firstPkg, secondPkg ->
+                                    FloatingWindowRegistry.openSplitScreen(
+                                        context = this@FloatingWindowMenuActivity,
+                                        firstPackage = firstPkg,
+                                        secondPackage = secondPkg
+                                    )
+                                    dismiss()
+                                },
                                 onRemoveApp = { pkg ->
-                                    FloatingWindowRegistry.remove(this@FloatingWindowMenuActivity, pkg)
+                                    FloatingWindowRegistry.closeAppDefinitively(this@FloatingWindowMenuActivity, pkg)
                                     if (FloatingWindowRegistry.entries.value.isEmpty()) {
                                         dismiss()
                                     }
                                 },
                                 onClearAll = {
                                     FloatingWindowRegistry.clearAll(this@FloatingWindowMenuActivity)
+                                    EdgePanelService.minimizeToBackground(this@FloatingWindowMenuActivity)
                                     dismiss()
                                 },
                                 onMoveSlot = { from, to ->
@@ -238,5 +249,9 @@ class FloatingWindowMenuActivity : ComponentActivity() {
     override fun onDestroy() {
         EdgePanelService.setPanelOpen(false)
         super.onDestroy()
+    }
+
+    companion object {
+        const val EXTRA_START_SPLIT = "start_split"
     }
 }

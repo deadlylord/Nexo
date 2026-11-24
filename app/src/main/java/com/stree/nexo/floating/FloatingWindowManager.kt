@@ -123,6 +123,63 @@ object FloatingWindowRegistry {
     }
 
     /**
+     * Cierra definitivamente una ventana flotante: la quita del registro y de la burbuja,
+     * sale de la ventana hacia el fondo y limpia su proceso en segundo plano.
+     */
+    fun closeAppDefinitively(context: Context, packageName: String) {
+        val appContext = context.applicationContext
+        _entries.update { list -> list.filterNot { it.packageName == packageName } }
+        EdgePanelService.syncFloatingBubble(appContext)
+
+        val nextActive = _entries.value.firstOrNull { !it.minimized }
+        if (nextActive != null) {
+            ItemLauncher.launchPackageFloatingInBounds(
+                context = appContext,
+                packageName = nextActive.packageName,
+                bounds = nextActive.lastBounds,
+                registerInDock = false
+            )
+        } else {
+            EdgePanelService.minimizeToBackground(appContext)
+        }
+
+        mainHandler.postDelayed({
+            runCatching {
+                val am = appContext.getSystemService(android.app.ActivityManager::class.java)
+                am?.killBackgroundProcesses(packageName)
+            }
+        }, 260L)
+    }
+
+    /**
+     * Pone las apps seleccionadas en pantalla dividida del sistema y limpia sus burbujas.
+     */
+    fun openSplitScreen(context: Context, firstPackage: String, secondPackage: String?): Boolean {
+        val appContext = context.applicationContext
+        if (!secondPackage.isNullOrBlank() && secondPackage != firstPackage) {
+            _entries.update { list ->
+                list.filterNot { it.packageName == firstPackage || it.packageName == secondPackage }
+            }
+            EdgePanelService.syncFloatingBubble(appContext)
+            return com.stree.nexo.panel.SplitScreenService.launchSplitPair(appContext, firstPackage, secondPackage)
+        }
+
+        _entries.update { list -> list.filterNot { it.packageName == firstPackage } }
+        EdgePanelService.syncFloatingBubble(appContext)
+        ItemLauncher.launchPackageFullscreen(appContext, firstPackage)
+        mainHandler.postDelayed({
+            if (!com.stree.nexo.panel.SplitScreenService.performToggleSplitScreen()) {
+                android.widget.Toast.makeText(
+                    appContext,
+                    "Activa Nexo en Accesibilidad para dividir automáticamente o elige 2 apps en el menú",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+            }
+        }, 320L)
+        return true
+    }
+
+    /**
      * Calcula el rectángulo exacto de un slot dentro de la zona segura de pantalla.
      */
     fun computeSlotBounds(
