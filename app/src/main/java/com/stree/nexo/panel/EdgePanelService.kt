@@ -62,7 +62,10 @@ import com.stree.nexo.data.PreviousAppTarget
 import com.stree.nexo.data.UsageStore
 import com.stree.nexo.floating.FloatingAppBubbleController
 import com.stree.nexo.floating.FloatingWindowRegistry
+import com.stree.nexo.media.LyricsTrack
 import com.stree.nexo.media.MediaControlService
+import com.stree.nexo.media.SongLyrics
+import com.stree.nexo.media.fetchLyrics
 import com.stree.nexo.media.NowPlaying
 import androidx.compose.ui.graphics.toArgb
 import com.stree.nexo.search.ItemLauncher
@@ -75,6 +78,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONException
+import java.io.IOException
 import java.util.Locale
 import kotlin.math.abs
 
@@ -105,6 +110,11 @@ class EdgePanelService : Service() {
     private var currentPlaybackPkg: String? = null
     private var currentCall: CallPulse? = null
     private var playbackJob: Job? = null
+    private var lyricsJob: Job? = null
+    private var lyricsTrack: LyricsTrack? = null
+    private var songLyrics: SongLyrics? = null
+    private var lyricsStatus = ""
+    private var lyricsPage = 0
 
     // Cronómetro integrado en la Isla Dinámica
     private var stopwatchRunning = false
@@ -121,6 +131,7 @@ class EdgePanelService : Service() {
     private var wasMediaActivelyPlaying = false
     private var lastMediaPausedKey: String? = null
     private var activeNotifKey: String? = null
+    private var latestIslandNotification: NotificationPulse? = null
     private var screenWasOff = false
     private var lastUnlockOpenMs = 0L
 
@@ -171,9 +182,11 @@ class EdgePanelService : Service() {
                 Intent.ACTION_SCREEN_OFF -> {
                     screenWasOff = true
                     gestureHandler.removeCallbacks(autoOpenUnlockRunnable)
+                    if (Prefs.dynamicIslandHideOnLock(this@EdgePanelService)) collapseIslandExpansion()
                 }
                 Intent.ACTION_USER_PRESENT -> {
                     screenWasOff = false
+                    if (Prefs.dynamicIslandHideOnLock(this@EdgePanelService)) refreshIslandIdleState()
                     scheduleAutoOpenOnUnlock()
                 }
                 Intent.ACTION_SCREEN_ON -> {
@@ -181,12 +194,16 @@ class EdgePanelService : Service() {
                     val locked = getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
                     if (screenWasOff && !locked) {
                         screenWasOff = false
+                        if (Prefs.dynamicIslandHideOnLock(this@EdgePanelService)) refreshIslandIdleState()
                         scheduleAutoOpenOnUnlock()
                     }
                 }
                 Intent.ACTION_POWER_CONNECTED -> {
                     lastPluggedState = 1
                     showChargingIslandAlert(readBatteryPercent())
+                }
+                NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED -> {
+                    if (islandHubExpanded) refreshIslandIdleState()
                 }
                 Intent.ACTION_BATTERY_CHANGED -> {
                     val plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
@@ -339,7 +356,7 @@ class EdgePanelService : Service() {
     }
 
     private val mediaPauseHideRunnable = Runnable {
-        if (currentPlayback?.playing != true) {
+        if (currentPlayback?.playing != true && lyricsTrack == null) {
             wasMediaActivelyPlaying = false
             mediaHiddenWhilePaused = true
             islandMediaExpanded = false
@@ -539,6 +556,7 @@ class EdgePanelService : Service() {
                     addAction(Intent.ACTION_USER_PRESENT)
                     addAction(Intent.ACTION_SCREEN_ON)
                     addAction(Intent.ACTION_SCREEN_OFF)
+                    addAction(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED)
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     registerReceiver(systemReceiver, filter, RECEIVER_EXPORTED)
@@ -580,6 +598,10 @@ class EdgePanelService : Service() {
         playbackJob?.cancel()
         playbackJob = gestureScope.launch {
             MediaControlService.playback.collectLatest { playing ->
+                if (lyricsTrack != null && lyricsTrack != playing?.lyricsTrack()) {
+                    clearLyrics()
+                    if (islandMediaExpanded) scheduleExpandAutoCollapse(8_000L)
+                }
                 currentPlayback = playing
                 val pkg = playing?.packageName?.takeIf { it.isNotBlank() }
                 if (pkg != currentPlaybackPkg) {
@@ -720,6 +742,12 @@ class EdgePanelService : Service() {
                     runCatching { now.controller.transportControls.seekTo(targetMs) }
                     scheduleExpandAutoCollapse(8_000L)
                 }
+                override fun onMediaLyrics() = toggleLyrics()
+                override fun onMediaLyricsPage(delta: Int) {
+                    val size = songLyrics?.plain?.size ?: return
+                    lyricsPage = (lyricsPage + delta).coerceIn(0, (size - 1) / 2)
+                    refreshIslandIdleState()
+                }
                 override fun onMediaOpenApp() {
                     Haptics.perform(this@EdgePanelService)
                     collapseIslandExpansion()
@@ -743,12 +771,15 @@ class EdgePanelService : Service() {
                     if (next) controls.skipToNext() else controls.skipToPrevious()
                 }
                 override fun onNotificationOpenFloating() {
+                    val pulse = recentIslandNotification() ?: return
+                    if (isDeviceLocked()) return
                     collapseIslandAllTemp()
-                    openLatestNotification()
+                    openLatestNotification(pulse)
                 }
                 override fun onNotificationQuickAction(index: Int) {
                     Haptics.perform(this@EdgePanelService)
-                    val action = ClipboardHistoryStore.latestNotification?.actions?.getOrNull(index)
+                    if (isDeviceLocked()) return
+                    val action = recentIslandNotification()?.actions?.getOrNull(index)
                     collapseIslandAllTemp()
                     if (action != null) {
                         runCatching { action.intent.send() }
@@ -797,6 +828,7 @@ class EdgePanelService : Service() {
     }
 
     private fun removeDynamicIsland() {
+        clearLyrics()
         gestureHandler.removeCallbacks(islandAlertTimeoutRunnable)
         gestureHandler.removeCallbacks(islandExpandTimeoutRunnable)
         gestureHandler.removeCallbacks(islandLiveTickRunnable)
@@ -869,8 +901,10 @@ class EdgePanelService : Service() {
             }
             IslandMode.EXPANDED_MEDIA, IslandMode.EXPANDED_HUB -> collapseIslandExpansion()
             IslandMode.NOTIFICATION, IslandMode.EXPANDED_NOTIFICATION -> {
+                val pulse = recentIslandNotification() ?: return
+                if (isDeviceLocked()) return
                 collapseIslandAllTemp()
-                openLatestNotification()
+                openLatestNotification(pulse)
             }
             IslandMode.CLIPBOARD -> {
                 collapseIslandAllTemp()
@@ -967,7 +1001,7 @@ class EdgePanelService : Service() {
     }
 
     private fun expandLatestNotification() {
-        val pulse = ClipboardHistoryStore.latestNotification ?: run {
+        val pulse = recentIslandNotification() ?: run {
             openIslandHub()
             return
         }
@@ -1012,6 +1046,36 @@ class EdgePanelService : Service() {
             IslandHubAction.SILENT -> {
                 cycleRingerModeFromHub()
                 gestureHandler.postDelayed({ if (islandHubExpanded) refreshIslandIdleState() }, 180L)
+                scheduleExpandAutoCollapse(6_500L)
+            }
+            IslandHubAction.DO_NOT_DISTURB -> {
+                val manager = getSystemService(NotificationManager::class.java) ?: return
+                if (!manager.isNotificationPolicyAccessGranted) {
+                    collapseIslandExpansion()
+                    startOverlayActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+                    return
+                }
+                val target = if (manager.currentInterruptionFilter == NotificationManager.INTERRUPTION_FILTER_ALL) {
+                    NotificationManager.INTERRUPTION_FILTER_PRIORITY
+                } else {
+                    NotificationManager.INTERRUPTION_FILTER_ALL
+                }
+                runCatching { manager.setInterruptionFilter(target) }
+                    .onSuccess {
+                        if (Build.VERSION.SDK_INT >= 35 && target == NotificationManager.INTERRUPTION_FILTER_ALL) {
+                            gestureHandler.postDelayed({
+                                if (islandHubExpanded &&
+                                    manager.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL
+                                ) {
+                                    Toast.makeText(this, "Revisa los modos activos de No molestar en Android", Toast.LENGTH_SHORT).show()
+                                }
+                            }, 450L)
+                        }
+                    }
+                    .onFailure {
+                        Toast.makeText(this, "No se pudo cambiar No molestar", Toast.LENGTH_SHORT).show()
+                    }
+                refreshIslandIdleState()
                 scheduleExpandAutoCollapse(6_500L)
             }
             IslandHubAction.SCREENSHOT -> {
@@ -1088,6 +1152,7 @@ class EdgePanelService : Service() {
     }
 
     private fun scheduleExpandAutoCollapse(delayMs: Long) {
+        if (islandMediaExpanded && lyricsTrack != null) return
         gestureHandler.removeCallbacks(islandExpandTimeoutRunnable)
         gestureHandler.postDelayed(islandExpandTimeoutRunnable, delayMs)
     }
@@ -1095,8 +1160,18 @@ class EdgePanelService : Service() {
     private fun canShowIsland(): Boolean {
         if (!Prefs.dynamicIslandEnabled(this)) return false
         if (isLandscapeHidden()) return false
+        if (Prefs.dynamicIslandHideOnLock(this) && (screenWasOff || isDeviceLocked())) return false
         if (calibrationMode != IslandCalibrationMode.OFF) return true
         return !hostUiVisible && !panelUiVisible
+    }
+
+    private fun shouldSuppressIslandAlerts(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
+            calibrationMode != IslandCalibrationMode.OFF ||
+            !Prefs.dynamicIslandCompactFullscreen(this)
+        ) return false
+        val insets = islandView?.rootWindowInsets ?: return false
+        return !insets.isVisible(android.view.WindowInsets.Type.statusBars())
     }
 
     private fun computeCurrentPlaybackPositionMs(playing: NowPlaying): Long {
@@ -1162,6 +1237,7 @@ class EdgePanelService : Service() {
         val view = islandView ?: return
         val params = islandParams ?: return
         if (displayState.mode == IslandMode.HIDDEN || !canShowIsland()) {
+            clearLyrics()
             view.hideImmediate()
             view.visibility = View.GONE
             gestureHandler.removeCallbacks(islandLiveTickRunnable)
@@ -1174,6 +1250,7 @@ class EdgePanelService : Service() {
             displayState
         }
 
+        if (finalState.mode != IslandMode.EXPANDED_MEDIA || finalState.calibrationGuide) clearLyrics()
         val targetW = dp(
             view.desiredWidthDp(
                 targetMode = finalState.mode,
@@ -1188,7 +1265,9 @@ class EdgePanelService : Service() {
                 targetMode = finalState.mode,
                 hideIdleVisual = finalState.hideIdleVisual,
                 calibrationGuide = finalState.calibrationGuide,
-                aboveStatusBar = islandUsingAccessibilityOverlay
+                aboveStatusBar = islandUsingAccessibilityOverlay,
+                lyricsAvailable = finalState.lyricsAvailable,
+                lyricsOpen = finalState.lyricsOpen
             )
         )
         val targetX = dp(Prefs.dynamicIslandHorizontalOffset(this))
@@ -1233,7 +1312,7 @@ class EdgePanelService : Service() {
     }
 
     private fun showIslandAlert(displayState: IslandDisplayState, durationMs: Long = ISLAND_ALERT_DURATION_MS) {
-        if (!canShowIsland()) return
+        if (!canShowIsland() || shouldSuppressIslandAlerts()) return
         if (islandView == null) return
         islandTemporaryAlert = true
         islandMediaExpanded = false
@@ -1250,9 +1329,56 @@ class EdgePanelService : Service() {
         return until > 0L && until > System.currentTimeMillis()
     }
 
-    private fun hasRecentNotification(): Boolean {
-        val latest = ClipboardHistoryStore.latestNotification ?: return false
-        return (System.currentTimeMillis() - latest.timestamp) in 0L..35_000L
+    private fun recentIslandNotification(): NotificationPulse? =
+        latestIslandNotification?.takeIf {
+            Prefs.acceptsIslandNotification(this, it) &&
+                (System.currentTimeMillis() - it.timestamp) in 0L..35_000L
+        }
+
+    private fun NowPlaying.lyricsTrack(): LyricsTrack? {
+        val song = title.trim()
+        val performer = artist.trim()
+        if (song.isEmpty() || performer.isEmpty()) return null
+        return LyricsTrack(song, performer, durationMs)
+    }
+
+    private fun clearLyrics() {
+        lyricsJob?.cancel()
+        lyricsJob = null
+        lyricsTrack = null
+        songLyrics = null
+        lyricsStatus = ""
+        lyricsPage = 0
+    }
+
+    private fun toggleLyrics() {
+        if (!islandMediaExpanded || calibrationMode != IslandCalibrationMode.OFF) return
+        val track = currentPlayback?.lyricsTrack() ?: return
+        Haptics.perform(this)
+        if (lyricsTrack != null) {
+            clearLyrics()
+            scheduleExpandAutoCollapse(8_000L)
+            if (currentPlayback?.playing != true) {
+                gestureHandler.postDelayed(mediaPauseHideRunnable, 2_400L)
+            }
+            refreshIslandIdleState()
+            return
+        }
+        gestureHandler.removeCallbacks(islandExpandTimeoutRunnable)
+        lyricsTrack = track
+        lyricsStatus = "Buscando en LRCLIB…"
+        refreshIslandIdleState()
+        lyricsJob = gestureScope.launch {
+            lyricsStatus = try {
+                songLyrics = fetchLyrics(track)
+                if (songLyrics == null) "Letra no disponible" else ""
+            } catch (_: IOException) {
+                "No se pudo conectar con LRCLIB"
+            } catch (_: JSONException) {
+                "No se pudo leer la letra"
+            }
+            refreshIslandIdleState()
+        }
     }
 
     private fun buildMediaDisplayState(expanded: Boolean, satellite: IslandSatellite, satIcon: Bitmap?): IslandDisplayState {
@@ -1263,6 +1389,13 @@ class EdgePanelService : Service() {
         val currentPos = computeCurrentPlaybackPositionMs(playing)
         val clampedPos = if (duration > 0L) currentPos.coerceAtMost(duration) else currentPos
         val fraction = if (duration > 0L) (clampedPos.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f
+        val track = if (expanded && calibrationMode == IslandCalibrationMode.OFF) playing.lyricsTrack() else null
+        val lyricsOpen = track != null && track == lyricsTrack
+        val lyrics = songLyrics.takeIf { lyricsOpen }
+        val timed = lyrics?.timed?.takeIf { lines -> lines.any { it.text.isNotBlank() } }
+        val plain = lyrics?.plain?.takeIf { timed == null }
+        val lookup = timed?.binarySearchBy(clampedPos) { it.positionMs } ?: -1
+        val activeLine = if (lookup >= 0) lookup else -lookup - 2
 
         return IslandDisplayState(
             mode = if (expanded) IslandMode.EXPANDED_MEDIA else IslandMode.COMPACT_MEDIA,
@@ -1276,6 +1409,20 @@ class EdgePanelService : Service() {
             progressLeftText = if (duration > 0L) formatMmSs(clampedPos) else "",
             progressRightText = if (duration > 0L) formatMmSs(duration) else "",
             mediaDurationMs = duration,
+            lyricsAvailable = track != null,
+            lyricsOpen = lyricsOpen,
+            lyricsPrimary = when {
+                timed != null -> timed.getOrNull(activeLine)?.text.orEmpty()
+                plain != null -> plain.getOrNull(lyricsPage * 2).orEmpty()
+                lyricsOpen -> lyricsStatus
+                else -> ""
+            },
+            lyricsSecondary = when {
+                timed != null -> timed.getOrNull(activeLine + 1)?.text.orEmpty()
+                plain != null -> plain.getOrNull(lyricsPage * 2 + 1).orEmpty()
+                else -> ""
+            },
+            lyricsPaging = (plain?.size ?: 0) > 2,
             satellite = if (expanded) IslandSatellite.NONE else satellite,
             satelliteIcon = if (expanded) null else satIcon
         )
@@ -1343,6 +1490,12 @@ class EdgePanelService : Service() {
                     flashlightOn = torchEnabled,
                     silentOn = ringer == AudioManager.RINGER_MODE_SILENT,
                     ringerMode = ringer,
+                    doNotDisturbOn = when (getSystemService(NotificationManager::class.java)?.currentInterruptionFilter) {
+                        NotificationManager.INTERRUPTION_FILTER_PRIORITY,
+                        NotificationManager.INTERRUPTION_FILTER_ALARMS,
+                        NotificationManager.INTERRUPTION_FILTER_NONE -> true
+                        else -> false
+                    },
                     stopwatchRunning = stopwatchRunning,
                     stopwatchLabel = formatMmSs(currentStopwatchMs())
                 )
@@ -1356,7 +1509,7 @@ class EdgePanelService : Service() {
         val call = currentCall
         val swActive = isStopwatchActive()
         val silentTimer = hasActiveSilentTimer()
-        val recentNotif = hasRecentNotification()
+        val recentNotif = recentIslandNotification()
 
         // 2. Música expandida
         if (islandMediaExpanded && playing != null) {
@@ -1391,7 +1544,7 @@ class EdgePanelService : Service() {
             val (sat, satIcon) = when {
                 swActive -> IslandSatellite.STOPWATCH to null
                 silentTimer -> IslandSatellite.SILENT_TIMER to null
-                recentNotif -> IslandSatellite.NOTIFICATION to ClipboardHistoryStore.latestNotification?.appIcon
+                recentNotif != null -> IslandSatellite.NOTIFICATION to recentNotif.appIcon
                 else -> IslandSatellite.NONE to null
             }
             renderIsland(buildMediaDisplayState(expanded = false, satellite = sat, satIcon = satIcon))
@@ -1402,7 +1555,7 @@ class EdgePanelService : Service() {
         if (swActive) {
             val (sat, satIcon) = when {
                 silentTimer -> IslandSatellite.SILENT_TIMER to null
-                recentNotif -> IslandSatellite.NOTIFICATION to ClipboardHistoryStore.latestNotification?.appIcon
+                recentNotif != null -> IslandSatellite.NOTIFICATION to recentNotif.appIcon
                 else -> IslandSatellite.NONE to null
             }
             renderIsland(
@@ -1429,8 +1582,8 @@ class EdgePanelService : Service() {
             } else {
                 "${mins}m"
             }
-            val (sat, satIcon) = if (recentNotif) {
-                IslandSatellite.NOTIFICATION to ClipboardHistoryStore.latestNotification?.appIcon
+            val (sat, satIcon) = if (recentNotif != null) {
+                IslandSatellite.NOTIFICATION to recentNotif.appIcon
             } else {
                 IslandSatellite.NONE to null
             }
@@ -1664,7 +1817,8 @@ class EdgePanelService : Service() {
                 accentColor = pulse.accentColor
             )
         }
-        if (Prefs.dynamicIslandEnabled(this) && Prefs.dynamicIslandNotifications(this)) {
+        if (Prefs.dynamicIslandEnabled(this) && Prefs.acceptsIslandNotification(this, pulse)) {
+            latestIslandNotification = pulse
             val locked = isDeviceLocked()
             activeNotifKey = pulse.key
             showIslandAlert(
@@ -1675,7 +1829,7 @@ class EdgePanelService : Service() {
                     icon = pulse.appIcon,
                     accentColor = pulse.accentColor
                 ),
-                durationMs = 4_800L
+                durationMs = Prefs.islandNotificationDurationMs(this).toLong()
             )
         }
     }
@@ -1711,10 +1865,9 @@ class EdgePanelService : Service() {
     }
 
     /** Abre la última notificación recibida directamente en ventana flotante (freeform). */
-    private fun openLatestNotification() {
+    private fun openLatestNotification(pulse: NotificationPulse? = ClipboardHistoryStore.latestNotification) {
         Haptics.perform(this)
         hideNotificationPreviewPopup()
-        val pulse = ClipboardHistoryStore.latestNotification
         if (pulse == null) {
             openPanel()
             return
@@ -2522,8 +2675,12 @@ class EdgePanelService : Service() {
         fun notifyNotificationRemoved(context: Context, key: String) {
             instance?.let { service ->
                 service.gestureHandler.post {
-                    if (service.activeNotifKey != null && service.activeNotifKey == key) {
+                    val matchesRecent = service.latestIslandNotification?.key == key
+                    if (matchesRecent) service.latestIslandNotification = null
+                    if (service.activeNotifKey == key) {
                         service.collapseIslandAllTemp()
+                    } else if (matchesRecent) {
+                        service.refreshIslandIdleState()
                     }
                 }
             }

@@ -13,12 +13,16 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.media.AudioManager
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.Layout
+import android.text.StaticLayout
 import android.text.TextPaint
 import android.text.TextUtils
 import android.view.MotionEvent
 import android.view.View
+import android.view.accessibility.AccessibilityNodeInfo
 import android.view.animation.LinearInterpolator
 import android.view.animation.OvershootInterpolator
 import androidx.compose.ui.graphics.toArgb
@@ -65,6 +69,7 @@ enum class IslandHubAction {
     SPOTLIGHT,
     FLASHLIGHT,
     SILENT,
+    DO_NOT_DISTURB,
     SCREENSHOT,
     CLIPBOARD,
     STOPWATCH_TOGGLE,
@@ -85,8 +90,14 @@ data class IslandDisplayState(
     val progressLeftText: String = "",
     val progressRightText: String = "",
     val mediaDurationMs: Long = 0L,
+    val lyricsAvailable: Boolean = false,
+    val lyricsOpen: Boolean = false,
+    val lyricsPrimary: String = "",
+    val lyricsSecondary: String = "",
+    val lyricsPaging: Boolean = false,
     val batteryPercent: Int = 0,
     val ringerMode: Int = AudioManager.RINGER_MODE_NORMAL,
+    val doNotDisturbOn: Boolean = false,
     val notificationActionLabels: List<String> = emptyList(),
     val satellite: IslandSatellite = IslandSatellite.NONE,
     val satelliteIcon: Bitmap? = null,
@@ -111,6 +122,8 @@ interface IslandInteractionListener {
     fun onMediaSeekTo(fraction: Float)
     fun onMediaSeekBy(deltaMs: Long)
     fun onMediaOpenApp()
+    fun onMediaLyrics()
+    fun onMediaLyricsPage(delta: Int)
     fun onMediaOpenFloating()
     fun onMediaSwipeSkip(next: Boolean)
     fun onNotificationOpenFloating()
@@ -177,11 +190,18 @@ class DynamicIslandView(context: Context) : View(context) {
     private val forwardRect = RectF()
     private val mediaHeaderRect = RectF()
     private val mediaFloatRect = RectF()
+    private val lyricsToggleRect = RectF()
+    private val lyricsPreviousRect = RectF()
+    private val lyricsNextRect = RectF()
+    private var lyricsLayoutKey: List<Any>? = null
+    private var lyricsLayout: StaticLayout? = null
     private val seekBarRect = RectF()
     private val seekBarHitRect = RectF()
     private val notifFloatBtnRect = RectF()
     private val notifActionRects = Array(2) { RectF() }
-    private val hubTileRects = Array(5) { RectF() }
+    private val hubTileRects = Array(6) { RectF() }
+    private var backgroundAlpha = 255
+    private var textScale = 1f
     private val hubStopwatchToggleRect = RectF()
     private val hubStopwatchResetRect = RectF()
 
@@ -270,7 +290,11 @@ class DynamicIslandView(context: Context) : View(context) {
             IslandMode.BLUETOOTH -> (expW * 0.78f).toInt().coerceIn(220, 310)
             IslandMode.CLIPBOARD -> (expW * 0.74f).toInt().coerceIn(210, 300)
             IslandMode.SCREENSHOT -> (expW * 0.76f).toInt().coerceIn(216, 304)
-            IslandMode.NOTIFICATION -> (expW * 0.90f).toInt().coerceIn(248, 356)
+            IslandMode.NOTIFICATION -> if (Prefs.islandNotificationPill(context) && !calibrationGuide) {
+                (camGap + 156).coerceIn(174, 266)
+            } else {
+                (expW * 0.90f).toInt().coerceIn(248, 356)
+            }
             IslandMode.EXPANDED_MEDIA -> expW
             IslandMode.EXPANDED_NOTIFICATION -> expW
             IslandMode.EXPANDED_HUB -> expW
@@ -282,7 +306,9 @@ class DynamicIslandView(context: Context) : View(context) {
         targetMode: IslandMode = state.mode,
         hideIdleVisual: Boolean = state.hideIdleVisual,
         calibrationGuide: Boolean = state.calibrationGuide,
-        aboveStatusBar: Boolean = true
+        aboveStatusBar: Boolean = true,
+        lyricsAvailable: Boolean = state.lyricsAvailable,
+        lyricsOpen: Boolean = state.lyricsOpen
     ): Int {
         val idleH = Prefs.dynamicIslandIdleHeight(context)
         val topSafe = cameraTopSafeDp()
@@ -309,17 +335,32 @@ class DynamicIslandView(context: Context) : View(context) {
             IslandMode.BLUETOOTH,
             IslandMode.CLIPBOARD,
             IslandMode.SCREENSHOT -> topSafe + 40
-            IslandMode.NOTIFICATION -> topSafe + 48
+            IslandMode.NOTIFICATION -> topSafe + if (Prefs.islandNotificationPill(context) && !calibrationGuide) 32 else 48
             IslandMode.EXPANDED_NOTIFICATION -> topSafe + (expH - 18).coerceAtLeast(108)
             IslandMode.EXPANDED_HUB -> topSafe + (expH - 12).coerceAtLeast(116)
-            IslandMode.EXPANDED_MEDIA -> topSafe + expH
+            IslandMode.EXPANDED_MEDIA -> topSafe + expH + lyricsHeightDp(lyricsAvailable, lyricsOpen)
         }
     }
 
+    private fun lyricsHeightDp(available: Boolean, open: Boolean): Int = when {
+        !available -> 0
+        open -> 112
+        else -> 36
+    }
+
     fun render(newState: IslandDisplayState) {
+        backgroundAlpha = Prefs.dynamicIslandOpacity(context) * 255 / 100
+        textScale = Prefs.dynamicIslandTextScale(context) / 100f
         val modeChanged = state.mode != newState.mode || state.satellite != newState.satellite
         if (modeChanged) {
             isSeeking = false
+        }
+        if (state.lyricsAvailable != newState.lyricsAvailable) {
+            importantForAccessibility = if (newState.lyricsAvailable) {
+                IMPORTANT_FOR_ACCESSIBILITY_YES
+            } else {
+                IMPORTANT_FOR_ACCESSIBILITY_AUTO
+            }
         }
         state = newState
 
@@ -526,6 +567,48 @@ class DynamicIslandView(context: Context) : View(context) {
         return super.onTouchEvent(event)
     }
 
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        if (!state.lyricsAvailable) return
+        info.contentDescription = listOf(state.title, state.subtitle, state.lyricsPrimary, state.lyricsSecondary)
+            .filter(String::isNotBlank).joinToString("\n")
+        val toggle = if (state.lyricsOpen) {
+            AccessibilityNodeInfo.AccessibilityAction.ACTION_COLLAPSE
+        } else {
+            AccessibilityNodeInfo.AccessibilityAction.ACTION_EXPAND
+        }
+        info.addAction(AccessibilityNodeInfo.AccessibilityAction(
+            toggle.id, if (state.lyricsOpen) "Ocultar letra" else "Buscar letra en LRCLIB"
+        ))
+        if (state.lyricsPaging) {
+            info.addAction(AccessibilityNodeInfo.AccessibilityAction(
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD.id, "Versos anteriores"
+            ))
+            info.addAction(AccessibilityNodeInfo.AccessibilityAction(
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD.id, "Versos siguientes"
+            ))
+        }
+    }
+
+    override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
+        val target = listener
+        if (target != null && state.lyricsAvailable) {
+            when {
+                action == AccessibilityNodeInfo.AccessibilityAction.ACTION_EXPAND.id && !state.lyricsOpen ->
+                    target.onMediaLyrics()
+                action == AccessibilityNodeInfo.AccessibilityAction.ACTION_COLLAPSE.id && state.lyricsOpen ->
+                    target.onMediaLyrics()
+                action == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD.id && state.lyricsPaging ->
+                    target.onMediaLyricsPage(-1)
+                action == AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD.id && state.lyricsPaging ->
+                    target.onMediaLyricsPage(1)
+                else -> return super.performAccessibilityAction(action, arguments)
+            }
+            return true
+        }
+        return super.performAccessibilityAction(action, arguments)
+    }
+
     private fun handleTap(x: Float, y: Float) {
         if (hasSatellite() && satelliteRect.contains(x, y)) {
             listener?.onTapSatellite(state.satellite)
@@ -533,6 +616,9 @@ class DynamicIslandView(context: Context) : View(context) {
         }
         when (state.mode) {
             IslandMode.EXPANDED_MEDIA -> when {
+                state.lyricsAvailable && lyricsToggleRect.contains(x, y) -> listener?.onMediaLyrics()
+                state.lyricsPaging && lyricsPreviousRect.contains(x, y) -> listener?.onMediaLyricsPage(-1)
+                state.lyricsPaging && lyricsNextRect.contains(x, y) -> listener?.onMediaLyricsPage(1)
                 mediaFloatRect.contains(x, y) -> listener?.onMediaOpenFloating()
                 rewindRect.contains(x, y) -> listener?.onMediaSeekBy(-10_000L)
                 prevRect.contains(x, y) -> listener?.onMediaPrev()
@@ -556,7 +642,8 @@ class DynamicIslandView(context: Context) : View(context) {
                     IslandHubAction.FLASHLIGHT,
                     IslandHubAction.SILENT,
                     IslandHubAction.SCREENSHOT,
-                    IslandHubAction.CLIPBOARD
+                    IslandHubAction.CLIPBOARD,
+                    IslandHubAction.DO_NOT_DISTURB
                 )
                 for (i in actions.indices) {
                     if (hubTileRects[i].contains(x, y)) {
@@ -623,7 +710,7 @@ class DynamicIslandView(context: Context) : View(context) {
         bgPaint.color = if (state.calibrationGuide && state.mode == IslandMode.IDLE_PILL && state.hideIdleVisual) {
             Color.argb(170, 0, 0, 0)
         } else {
-            Color.BLACK
+            Color.argb(backgroundAlpha, 0, 0, 0)
         }
         canvas.drawRoundRect(pillRect, cornerRadius, cornerRadius, bgPaint)
 
@@ -632,7 +719,7 @@ class DynamicIslandView(context: Context) : View(context) {
             val satLeft = pillRect.right + satGap
             val satTop = pillRect.centerY() - satDiameter / 2f
             satelliteRect.set(satLeft, satTop, satLeft + satDiameter, satTop + satDiameter)
-            bgPaint.color = Color.BLACK
+            bgPaint.color = Color.argb(backgroundAlpha, 0, 0, 0)
             canvas.drawOval(satelliteRect, bgPaint)
             drawSatelliteContent(canvas, accentArgb, secondaryAccentArgb)
         } else {
@@ -837,7 +924,7 @@ class DynamicIslandView(context: Context) : View(context) {
         val badgeW = dp(62f)
         val textLeft = iconCx + dp(14f)
         val maxW = (pillRect.right - badgeW - dp(12f) - textLeft).coerceAtLeast(dp(40f))
-        titlePaint.textSize = dp(12f)
+        titlePaint.textSize = dp(12f) * textScale
         titlePaint.color = Color.WHITE
         val name = TextUtils.ellipsize(
             state.title.ifBlank { "Bluetooth" },
@@ -881,7 +968,7 @@ class DynamicIslandView(context: Context) : View(context) {
 
         val textLeft = iconCx + dp(16f)
         val textMaxW = (chipRect.left - dp(8f) - textLeft).coerceAtLeast(dp(30f))
-        titlePaint.textSize = dp(12f)
+        titlePaint.textSize = dp(12f) * textScale
         titlePaint.color = Color.WHITE
         val label = TextUtils.ellipsize(state.title, titlePaint, textMaxW, TextUtils.TruncateAt.END).toString()
         val baseline = cy - (titlePaint.descent() + titlePaint.ascent()) / 2f
@@ -889,8 +976,9 @@ class DynamicIslandView(context: Context) : View(context) {
     }
 
     private fun drawCompactNotification(canvas: Canvas, accentArgb: Int, topSafePx: Float) {
+        val compact = Prefs.islandNotificationPill(context) && !state.calibrationGuide
         val cy = topSafePx + (pillRect.bottom - topSafePx) / 2f
-        val iconR = dp(15.5f)
+        val iconR = dp(if (compact) 11f else 15.5f)
         val iconCx = pillRect.left + dp(14f) + iconR
         val bmp = state.icon
         if (bmp != null) {
@@ -909,7 +997,7 @@ class DynamicIslandView(context: Context) : View(context) {
         val textLeft = iconCx + iconR + dp(10f)
         val textMaxW = (pipCx - pipR - dp(8f) - textLeft).coerceAtLeast(dp(40f))
 
-        titlePaint.textSize = dp(12.5f)
+        titlePaint.textSize = dp(12.5f) * textScale
         titlePaint.color = Color.WHITE
         val topLine = TextUtils.ellipsize(
             state.title.ifBlank { "Notificación" },
@@ -917,9 +1005,11 @@ class DynamicIslandView(context: Context) : View(context) {
             textMaxW,
             TextUtils.TruncateAt.END
         ).toString()
-        canvas.drawText(topLine, textLeft, cy - dp(2.5f), titlePaint)
+        val baseline = if (compact) cy - (titlePaint.descent() + titlePaint.ascent()) / 2f else cy - dp(2.5f)
+        canvas.drawText(topLine, textLeft, baseline, titlePaint)
+        if (compact) return
 
-        subtitlePaint.textSize = dp(11f)
+        subtitlePaint.textSize = dp(11f) * textScale
         subtitlePaint.color = Color.argb(185, 214, 222, 236)
         val bottomLine = TextUtils.ellipsize(
             state.subtitle.ifBlank { "Toca: flotante · Sostén: leer" },
@@ -932,7 +1022,8 @@ class DynamicIslandView(context: Context) : View(context) {
 
     private fun drawExpandedMedia(canvas: Canvas, primaryArgb: Int, secondaryArgb: Int, topSafePx: Float) {
         val padH = dp(16f)
-        val availH = (pillRect.bottom - topSafePx).coerceAtLeast(dp(106f))
+        val playerBottom = pillRect.bottom - dp(lyricsHeightDp(state.lyricsAvailable, state.lyricsOpen).toFloat())
+        val availH = (playerBottom - topSafePx).coerceAtLeast(dp(106f))
         val artSize = dp(46f).coerceAtMost(availH * 0.42f)
         val artLeft = pillRect.left + padH
         val artTop = topSafePx + dp(6f)
@@ -977,7 +1068,7 @@ class DynamicIslandView(context: Context) : View(context) {
         val textLeft = artLeft + artSize + dp(11f)
         val textMaxW = (eqStart - dp(8f) - textLeft).coerceAtLeast(dp(40f))
 
-        titlePaint.textSize = dp(13.6f)
+        titlePaint.textSize = dp(13.6f) * textScale
         titlePaint.color = Color.WHITE
         val title = TextUtils.ellipsize(
             state.title.ifBlank { "Reproducción multimedia" },
@@ -987,7 +1078,7 @@ class DynamicIslandView(context: Context) : View(context) {
         ).toString()
         canvas.drawText(title, textLeft, artCy - dp(3f), titlePaint)
 
-        subtitlePaint.textSize = dp(11.3f)
+        subtitlePaint.textSize = dp(11.3f) * textScale
         subtitlePaint.color = Color.argb(185, 214, 222, 236)
         val artist = TextUtils.ellipsize(
             state.subtitle.ifBlank { "Toca aquí para abrir la app" },
@@ -999,7 +1090,7 @@ class DynamicIslandView(context: Context) : View(context) {
 
         // Barra de progreso TÁCTIL (arrastrar o tocar para adelantar/retroceder)
         val controlsH = dp(34f)
-        val controlsCy = pillRect.bottom - dp(12f) - controlsH / 2f
+        val controlsCy = playerBottom - dp(12f) - controlsH / 2f
         val barY = ((artTop + artSize) + (controlsCy - controlsH / 2f)) / 2f
 
         val activeFraction = (if (isSeeking) seekPreviewFraction else state.progressFraction).coerceIn(0f, 1f)
@@ -1105,6 +1196,57 @@ class DynamicIslandView(context: Context) : View(context) {
         canvas.drawRoundRect(forwardRect, controlsH / 2f, controlsH / 2f, chipPaint)
         badgePaint.color = Color.argb(225, 236, 240, 248)
         canvas.drawText("+10", forwardRect.centerX(), seekBaseline, badgePaint)
+        if (state.lyricsAvailable) drawMediaLyrics(canvas, playerBottom, primaryArgb)
+    }
+
+    private fun drawMediaLyrics(canvas: Canvas, top: Float, accent: Int) {
+        val center = pillRect.centerX()
+        lyricsToggleRect.set(center - dp(58f), top - dp(3f), center + dp(58f), top + dp(30f))
+        chipPaint.color = withAlpha(accent, if (state.lyricsOpen) 72 else 44)
+        canvas.drawRoundRect(lyricsToggleRect, dp(13f), dp(13f), chipPaint)
+        badgePaint.textSize = dp(11f)
+        badgePaint.color = Color.WHITE
+        val toggleLabel = if (state.lyricsOpen) "Ocultar letra" else "Letra · LRCLIB"
+        val baseline = lyricsToggleRect.centerY() - (badgePaint.ascent() + badgePaint.descent()) / 2f
+        canvas.drawText(toggleLabel, center, baseline, badgePaint)
+        if (!state.lyricsOpen) return
+
+        val pad = dp(16f)
+        val side = if (state.lyricsPaging) dp(30f) else 0f
+        val textWidth = (pillRect.width() - (pad + side) * 2f).toInt().coerceAtLeast(1)
+        val lineSize = dp(13f) * textScale
+        val key = listOf(state.lyricsPrimary, textWidth, lineSize)
+        if (key != lyricsLayoutKey) {
+            lyricsLayoutKey = key
+            val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                textSize = lineSize
+            }
+            lyricsLayout = StaticLayout.Builder.obtain(state.lyricsPrimary, 0, state.lyricsPrimary.length, paint, textWidth)
+                .setAlignment(Layout.Alignment.ALIGN_CENTER)
+                .setMaxLines(2)
+                .setEllipsize(TextUtils.TruncateAt.END)
+                .setIncludePad(false)
+                .build()
+        }
+        val layout = lyricsLayout
+        if (layout != null) {
+            canvas.save()
+            canvas.translate(center - textWidth / 2f, top + dp(40f))
+            layout.draw(canvas)
+            canvas.restore()
+        }
+        badgePaint.textSize = dp(11f) * textScale
+        badgePaint.color = Color.argb(185, 214, 222, 236)
+        val next = TextUtils.ellipsize(state.lyricsSecondary, badgePaint, textWidth.toFloat(), TextUtils.TruncateAt.END)
+        canvas.drawText(next.toString(), center, top + dp(91f), badgePaint)
+        if (state.lyricsPaging) {
+            lyricsPreviousRect.set(pillRect.left + pad, top + dp(37f), pillRect.left + pad + side, top + dp(86f))
+            lyricsNextRect.set(pillRect.right - pad - side, top + dp(37f), pillRect.right - pad, top + dp(86f))
+            badgePaint.textSize = dp(20f)
+            canvas.drawText("‹", lyricsPreviousRect.centerX(), top + dp(66f), badgePaint)
+            canvas.drawText("›", lyricsNextRect.centerX(), top + dp(66f), badgePaint)
+        }
     }
 
     private fun formatMmSsLocal(ms: Long): String {
@@ -1131,7 +1273,7 @@ class DynamicIslandView(context: Context) : View(context) {
         val textLeft = iconCx + iconR + dp(11f)
         val textMaxW = (pillRect.right - padH - textLeft).coerceAtLeast(dp(60f))
 
-        titlePaint.textSize = dp(13.2f)
+        titlePaint.textSize = dp(13.2f) * textScale
         titlePaint.color = Color.WHITE
         val header = TextUtils.ellipsize(
             state.title.ifBlank { "Notificación" },
@@ -1141,7 +1283,7 @@ class DynamicIslandView(context: Context) : View(context) {
         ).toString()
         canvas.drawText(header, textLeft, iconCy - dp(3f), titlePaint)
 
-        subtitlePaint.textSize = dp(11.3f)
+        subtitlePaint.textSize = dp(11.3f) * textScale
         subtitlePaint.color = Color.argb(190, 220, 226, 238)
         val sub = TextUtils.ellipsize(
             state.subtitle,
@@ -1154,7 +1296,7 @@ class DynamicIslandView(context: Context) : View(context) {
         }
 
         val previewY = iconCy + iconR + dp(15f)
-        subtitlePaint.textSize = dp(11.8f)
+        subtitlePaint.textSize = dp(11.8f) * textScale
         subtitlePaint.color = Color.argb(225, 238, 242, 248)
         val previewLine = TextUtils.ellipsize(
             state.preview.ifBlank { "Toca abajo para abrir en ventana flotante" },
@@ -1202,20 +1344,22 @@ class DynamicIslandView(context: Context) : View(context) {
     private fun drawExpandedHub(canvas: Canvas, primaryArgb: Int, secondaryArgb: Int, topSafePx: Float) {
         val padH = dp(14f)
         val topRowTop = topSafePx + dp(6f)
-        val tileSize = dp(46f)
-        val gap = ((pillRect.width() - padH * 2f) - tileSize * 5f) / 4f
+        val tileSize = dp(46f).coerceAtMost((pillRect.width() - padH * 2f) / hubTileRects.size)
+        val gap = ((pillRect.width() - padH * 2f) - tileSize * hubTileRects.size) / (hubTileRects.size - 1)
         val soundLabel = when (state.ringerMode) {
             AudioManager.RINGER_MODE_SILENT -> "Silencio"
             AudioManager.RINGER_MODE_VIBRATE -> "Vibrar"
             else -> "Sonido"
         }
-        val labels = listOf("Buscar", "Linterna", soundLabel, "Captura", "Clips")
+        val labels = listOf("Buscar", "Linterna", soundLabel, "Captura", "Clips", "No mol.")
 
-        for (i in 0 until 5) {
+        for (i in hubTileRects.indices) {
             val left = pillRect.left + padH + i * (tileSize + gap)
             hubTileRects[i].set(left, topRowTop, left + tileSize, topRowTop + tileSize + dp(14f))
 
-            val isActive = (i == 1 && state.flashlightOn) || (i == 2 && state.ringerMode != AudioManager.RINGER_MODE_NORMAL)
+            val isActive = (i == 1 && state.flashlightOn) ||
+                (i == 2 && state.ringerMode != AudioManager.RINGER_MODE_NORMAL) ||
+                (i == 5 && state.doNotDisturbOn)
             val cx = left + tileSize / 2f
             val cy = topRowTop + tileSize / 2f
 
@@ -1224,9 +1368,10 @@ class DynamicIslandView(context: Context) : View(context) {
                 i == 2 && state.ringerMode == AudioManager.RINGER_MODE_SILENT -> withAlpha(COLOR_CORAL, 78)
                 i == 2 && state.ringerMode == AudioManager.RINGER_MODE_VIBRATE -> withAlpha(COLOR_AMBER, 78)
                 i == 0 -> withAlpha(primaryArgb, 48)
+                i == 5 && state.doNotDisturbOn -> withAlpha(primaryArgb, 82)
                 else -> Color.argb(26, 255, 255, 255)
             }
-            canvas.drawCircle(cx, cy, dp(20f), chipPaint)
+            canvas.drawCircle(cx, cy, dp(20f).coerceAtMost(tileSize * 0.46f), chipPaint)
 
             val tint = when {
                 i == 1 && state.flashlightOn -> COLOR_AMBER
@@ -1235,6 +1380,7 @@ class DynamicIslandView(context: Context) : View(context) {
                 i == 2 -> COLOR_GREEN
                 i == 0 -> primaryArgb
                 i == 4 -> secondaryArgb
+                i == 5 && state.doNotDisturbOn -> primaryArgb
                 else -> Color.WHITE
             }
             when (i) {
@@ -1247,11 +1393,13 @@ class DynamicIslandView(context: Context) : View(context) {
                 }
                 3 -> drawScreenshotGlyph(canvas, cx, cy, dp(7.8f), tint)
                 4 -> drawClipboardGlyph(canvas, cx, cy, dp(7.8f), tint)
+                5 -> drawBellOffGlyph(canvas, cx, cy, dp(8.2f), tint)
             }
 
             badgePaint.textSize = dp(9.6f)
             badgePaint.color = if (isActive) Color.WHITE else Color.argb(185, 215, 222, 236)
-            canvas.drawText(labels[i], cx, topRowTop + tileSize + dp(10f), badgePaint)
+            val label = TextUtils.ellipsize(labels[i], badgePaint, tileSize + gap - dp(2f), TextUtils.TruncateAt.END)
+            canvas.drawText(label.toString(), cx, topRowTop + tileSize + dp(10f), badgePaint)
         }
 
         // Fila inferior: Cronómetro integrado rápido
@@ -1265,7 +1413,7 @@ class DynamicIslandView(context: Context) : View(context) {
         val rowCy = rowRect.centerY()
         drawClockGlyph(canvas, clockCx, rowCy, dp(7.5f), if (state.stopwatchRunning) COLOR_AMBER else Color.WHITE)
 
-        titlePaint.textSize = dp(12.8f)
+        titlePaint.textSize = dp(12.8f) * textScale
         titlePaint.color = Color.WHITE
         val swText = "Cronómetro  ${state.stopwatchLabel}"
         val swBase = rowCy - (titlePaint.descent() + titlePaint.ascent()) / 2f

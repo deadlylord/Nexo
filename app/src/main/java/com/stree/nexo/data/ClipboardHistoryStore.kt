@@ -40,6 +40,15 @@ data class NotificationPulse(
     val accentColor: Int?,
     val contentIntent: PendingIntent?,
     val actions: List<NotificationQuickAction>,
+    val timestamp: Long,
+    val silent: Boolean = false
+)
+
+data class IslandNotificationEntry(
+    val key: String,
+    val appName: String,
+    val title: String,
+    val textPreview: String,
     val timestamp: Long
 )
 
@@ -69,6 +78,22 @@ object ClipboardHistoryStore {
     @Volatile
     var latestNotification: NotificationPulse? = null
         private set
+
+    private val _islandNotificationHistory = MutableStateFlow<List<IslandNotificationEntry>>(emptyList())
+    val islandNotificationHistory = _islandNotificationHistory.asStateFlow()
+
+    @Synchronized
+    fun rememberIslandNotification(context: Context, pulse: NotificationPulse) {
+        if (!Prefs.islandNotificationHistoryEnabled(context) || !Prefs.acceptsIslandNotification(context, pulse)) return
+        val entry = IslandNotificationEntry(pulse.key, pulse.appName, pulse.title, pulse.textPreview, pulse.timestamp)
+        _islandNotificationHistory.value =
+            (listOf(entry) + _islandNotificationHistory.value.filterNot { it.key == entry.key }).take(MAX_ITEMS)
+    }
+
+    @Synchronized
+    fun clearIslandNotificationHistory() {
+        _islandNotificationHistory.value = emptyList()
+    }
 
     fun recordClip(text: String): Boolean {
         val clean = text.trim()
@@ -194,7 +219,8 @@ object ClipboardHistoryStore {
         textPreview: String = "",
         accentColor: Int?,
         contentIntent: PendingIntent?,
-        actions: List<NotificationQuickAction> = emptyList()
+        actions: List<NotificationQuickAction> = emptyList(),
+        silent: Boolean = false
     ): NotificationPulse {
         val pm = context.packageManager
         val appName = runCatching {
@@ -214,7 +240,8 @@ object ClipboardHistoryStore {
             accentColor = accentColor,
             contentIntent = contentIntent,
             actions = actions,
-            timestamp = System.currentTimeMillis()
+            timestamp = System.currentTimeMillis(),
+            silent = silent
         )
         latestNotification = pulse
         return pulse

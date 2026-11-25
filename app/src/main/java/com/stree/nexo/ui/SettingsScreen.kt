@@ -1,5 +1,6 @@
 package com.stree.nexo.ui
 
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
@@ -88,6 +89,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -127,6 +129,7 @@ import com.stree.nexo.data.Haptics
 import com.stree.nexo.data.PanelPage
 import com.stree.nexo.data.PanelSide
 import com.stree.nexo.data.PanelStyle
+import com.stree.nexo.data.ClipboardHistoryStore
 import com.stree.nexo.data.Prefs
 import com.stree.nexo.data.UsageStore
 import com.stree.nexo.media.MediaControlService
@@ -1598,6 +1601,10 @@ private fun DynamicIslandCard() {
     var mediaKeepPaused by remember { mutableStateOf(Prefs.dynamicIslandMediaKeepPaused(context)) }
     var notifications by remember { mutableStateOf(Prefs.dynamicIslandNotifications(context)) }
     var hideLandscape by remember { mutableStateOf(Prefs.dynamicIslandHideLandscape(context)) }
+    var hideOnLock by remember { mutableStateOf(Prefs.dynamicIslandHideOnLock(context)) }
+    var compactFullscreen by remember { mutableStateOf(Prefs.dynamicIslandCompactFullscreen(context)) }
+    var islandOpacity by remember { mutableIntStateOf(Prefs.dynamicIslandOpacity(context)) }
+    var islandTextScale by remember { mutableIntStateOf(Prefs.dynamicIslandTextScale(context)) }
     var previewMode by remember { mutableStateOf(com.stree.nexo.panel.IslandCalibrationMode.OFF) }
 
     var topOffset by remember { mutableIntStateOf(Prefs.dynamicIslandTopOffset(context)) }
@@ -1846,6 +1853,8 @@ private fun DynamicIslandCard() {
                     EdgePanelService.refreshIslandLive()
                 }
             )
+            if (notifications) IslandNotificationSettings()
+
             SwitchRow(
                 title = "Reproductor de música interactivo",
                 subtitle = "Barra táctil para adelantar/retroceder, color dinámico según carátula, -10s/+10s, deslizar para cambiar y botón flotante",
@@ -1877,6 +1886,42 @@ private fun DynamicIslandCard() {
                     EdgePanelService.refreshIslandLive()
                 }
             )
+            SwitchRow(
+                title = "Ocultar en la pantalla de bloqueo",
+                subtitle = "La isla vuelve al desbloquear el teléfono",
+                checked = hideOnLock,
+                onCheckedChange = {
+                    hideOnLock = it
+                    Prefs.setDynamicIslandHideOnLock(context, it)
+                    EdgePanelService.refreshIslandLive()
+                }
+            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                SwitchRow(
+                    title = "Modo discreto en pantalla completa",
+                    subtitle = "Evita avisos emergentes cuando una app oculta la barra de estado",
+                    checked = compactFullscreen,
+                    onCheckedChange = {
+                        compactFullscreen = it
+                        Prefs.setDynamicIslandCompactFullscreen(context, it)
+                        EdgePanelService.refreshIslandLive()
+                    }
+                )
+            }
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                FineTuneSlider("Opacidad del fondo (%)", islandOpacity, 65, 100, 5) {
+                    islandOpacity = it
+                    Prefs.setDynamicIslandOpacity(context, it)
+                    ensureLivePreview(com.stree.nexo.panel.IslandCalibrationMode.EXPANDED)
+                    EdgePanelService.refreshIslandLive()
+                }
+                FineTuneSlider("Tamaño del texto (%)", islandTextScale, 90, 115, 5) {
+                    islandTextScale = it
+                    Prefs.setDynamicIslandTextScale(context, it)
+                    ensureLivePreview(com.stree.nexo.panel.IslandCalibrationMode.EXPANDED)
+                    EdgePanelService.refreshIslandLive()
+                }
+            }
 
             SectionDivider()
 
@@ -2089,6 +2134,152 @@ private fun DynamicIslandCard() {
             }
         }
     }
+}
+
+@Composable
+private fun IslandNotificationSettings() {
+    val context = LocalContext.current
+    var duration by remember { mutableFloatStateOf(Prefs.islandNotificationDurationMs(context).toFloat()) }
+    var pill by remember { mutableStateOf(Prefs.islandNotificationPill(context)) }
+    var hideSilent by remember { mutableStateOf(Prefs.islandHideSilentNotifications(context)) }
+    var historyEnabled by remember { mutableStateOf(Prefs.islandNotificationHistoryEnabled(context)) }
+    var showAppRules by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
+
+    Column(Modifier.padding(horizontal = 16.dp)) {
+        LabeledSlider(
+            label = "Duración del aviso",
+            valueText = String.format(java.util.Locale.getDefault(), "%.1f s", duration / 1000f),
+            value = duration,
+            valueRange = 1_000f..10_000f,
+            onValueChange = { duration = it },
+            onValueChangeFinished = {
+                Prefs.setIslandNotificationDurationMs(context, duration.toInt())
+            }
+        )
+    }
+    SwitchRow(
+        title = "Aviso en píldora",
+        subtitle = "Muestra la app en una cápsula. Mantén pulsado para leer el aviso.",
+        checked = pill,
+        onCheckedChange = {
+            pill = it
+            Prefs.setIslandNotificationPill(context, it)
+            EdgePanelService.refreshIslandLive()
+        }
+    )
+    SwitchRow(
+        title = "Ocultar avisos silenciosos",
+        subtitle = "Filtra las notificaciones de baja importancia en la isla",
+        checked = hideSilent,
+        onCheckedChange = {
+            hideSilent = it
+            Prefs.setIslandHideSilentNotifications(context, it)
+            EdgePanelService.refreshIslandLive()
+        }
+    )
+    TextButton(onClick = { showAppRules = true }, modifier = Modifier.padding(horizontal = 8.dp)) {
+        Text("Filtrar por aplicación")
+    }
+    SwitchRow(
+        title = "Historial de la isla",
+        subtitle = "Guarda en memoria los últimos 12 avisos hasta que termine el proceso de Nexo",
+        checked = historyEnabled,
+        onCheckedChange = {
+            historyEnabled = it
+            Prefs.setIslandNotificationHistoryEnabled(context, it)
+            if (!it) ClipboardHistoryStore.clearIslandNotificationHistory()
+        }
+    )
+    if (historyEnabled) {
+        TextButton(onClick = { showHistory = true }, modifier = Modifier.padding(horizontal = 8.dp)) {
+            Text("Ver historial reciente")
+        }
+    }
+
+    if (showAppRules) IslandNotificationAppsDialog(onDismiss = { showAppRules = false })
+    if (showHistory) {
+        val history by ClipboardHistoryStore.islandNotificationHistory.collectAsState()
+        AlertDialog(
+            onDismissRequest = { showHistory = false },
+            title = { Text("Historial reciente") },
+            text = {
+                if (history.isEmpty()) {
+                    Text("Todavía no hay avisos.")
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 320.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(history, key = { it.key }) { entry ->
+                            Column {
+                                val time = android.text.format.DateFormat.getTimeFormat(context)
+                                    .format(java.util.Date(entry.timestamp))
+                                Text("${entry.appName} · $time", style = MaterialTheme.typography.labelLarge)
+                                if (entry.title.isNotBlank()) Text(entry.title)
+                                if (entry.textPreview.isNotBlank()) {
+                                    Text(entry.textPreview, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showHistory = false }) { Text("Cerrar") } },
+            dismissButton = {
+                TextButton(
+                    enabled = history.isNotEmpty(),
+                    onClick = { ClipboardHistoryStore.clearIslandNotificationHistory() }
+                ) { Text("Borrar historial") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun IslandNotificationAppsDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var blocked by remember { mutableStateOf(Prefs.islandBlockedNotificationApps(context)) }
+    var apps by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var query by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        apps = loadSettingsApps(context)
+    }
+    val filtered = remember(apps, query) {
+        val term = query.trim()
+        apps.filter { (pkg, label) -> label.contains(term, ignoreCase = true) || pkg.contains(term, ignoreCase = true) }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Aplicaciones en la isla") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Buscar aplicación…") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                LazyColumn(Modifier.heightIn(max = 300.dp)) {
+                    items(filtered, key = { it.first }) { (pkg, label) ->
+                        SwitchRow(
+                            title = label,
+                            subtitle = pkg,
+                            checked = pkg !in blocked,
+                            onCheckedChange = { allowed ->
+                                blocked = if (allowed) blocked - pkg else blocked + pkg
+                                Prefs.setIslandBlockedNotificationApps(context, blocked)
+                                EdgePanelService.refreshIslandLive()
+                            }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Listo") } }
+    )
 }
 
 @Composable
@@ -3187,6 +3378,20 @@ private fun GestureCustomizationSection() {
     }
 }
 
+private suspend fun loadSettingsApps(context: Context): List<Pair<String, String>> = withContext(Dispatchers.IO) {
+    val pm = context.packageManager
+    val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+    pm.queryIntentActivities(intent, 0)
+        .mapNotNull { info ->
+            val pkg = info.activityInfo?.packageName ?: return@mapNotNull null
+            if (pkg == context.packageName) return@mapNotNull null
+            val label = info.loadLabel(pm)?.toString()?.takeIf { it.isNotBlank() } ?: pkg
+            pkg to label
+        }
+        .distinctBy { it.first }
+        .sortedBy { it.second.lowercase() }
+}
+
 @Composable
 private fun EdgeAppPickerDialog(
     gestureLabel: String,
@@ -3199,19 +3404,7 @@ private fun EdgeAppPickerDialog(
     var apps by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
 
     LaunchedEffect(Unit) {
-        apps = withContext(Dispatchers.IO) {
-            val pm = context.packageManager
-            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-            pm.queryIntentActivities(intent, 0)
-                .mapNotNull { info ->
-                    val pkg = info.activityInfo?.packageName ?: return@mapNotNull null
-                    if (pkg == context.packageName) return@mapNotNull null
-                    val label = info.loadLabel(pm)?.toString()?.takeIf { it.isNotBlank() } ?: pkg
-                    pkg to label
-                }
-                .distinctBy { it.first }
-                .sortedBy { it.second.lowercase() }
-        }
+        apps = loadSettingsApps(context)
     }
 
     val filtered = remember(apps, query) {

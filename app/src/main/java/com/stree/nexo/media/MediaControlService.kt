@@ -156,9 +156,14 @@ class MediaControlService : NotificationListenerService() {
         mutablePlayback.value = null
     }
 
-    override fun onNotificationPosted(sbn: android.service.notification.StatusBarNotification?) {
-        super.onNotificationPosted(sbn)
+    override fun onNotificationPosted(
+        sbn: android.service.notification.StatusBarNotification?,
+        rankingMap: RankingMap?
+    ) {
         if (sbn == null) return
+        val ranking = Ranking()
+        val silent = rankingMap?.getRanking(sbn.key, ranking) == true &&
+            ranking.importance in android.app.NotificationManager.IMPORTANCE_NONE..android.app.NotificationManager.IMPORTANCE_LOW
         val pkg = sbn.packageName ?: return
         if (pkg == packageName) return
 
@@ -238,8 +243,10 @@ class MediaControlService : NotificationListenerService() {
             textPreview = rawText,
             accentColor = accent,
             contentIntent = notif.contentIntent,
-            actions = quickActions
+            actions = quickActions,
+            silent = silent
         )
+        com.stree.nexo.data.ClipboardHistoryStore.rememberIslandNotification(applicationContext, pulse)
         com.stree.nexo.panel.EdgePanelService.notifyNotificationPulse(applicationContext, pulse)
     }
 

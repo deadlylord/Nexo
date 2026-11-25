@@ -292,6 +292,34 @@ object Prefs {
     fun dynamicIslandMedia(context: Context): Boolean =
         prefs(context).getBoolean("dynamic_island_media", true)
 
+    fun dynamicIslandHideOnLock(context: Context): Boolean =
+        prefs(context).getBoolean("dynamic_island_hide_on_lock", false)
+
+    fun setDynamicIslandHideOnLock(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("dynamic_island_hide_on_lock", enabled).apply()
+    }
+
+    fun dynamicIslandCompactFullscreen(context: Context): Boolean =
+        prefs(context).getBoolean("dynamic_island_compact_fullscreen", false)
+
+    fun setDynamicIslandCompactFullscreen(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("dynamic_island_compact_fullscreen", enabled).apply()
+    }
+
+    fun dynamicIslandOpacity(context: Context): Int =
+        prefs(context).getInt("dynamic_island_opacity", 100).coerceIn(65, 100)
+
+    fun setDynamicIslandOpacity(context: Context, percent: Int) {
+        prefs(context).edit().putInt("dynamic_island_opacity", percent.coerceIn(65, 100)).apply()
+    }
+
+    fun dynamicIslandTextScale(context: Context): Int =
+        prefs(context).getInt("dynamic_island_text_scale", 100).coerceIn(90, 115)
+
+    fun setDynamicIslandTextScale(context: Context, percent: Int) {
+        prefs(context).edit().putInt("dynamic_island_text_scale", percent.coerceIn(90, 115)).apply()
+    }
+
     fun dynamicIslandMediaKeepPaused(context: Context): Boolean =
         prefs(context).getBoolean("dynamic_island_media_keep_paused_v2", false)
 
@@ -309,6 +337,46 @@ object Prefs {
     fun setDynamicIslandNotifications(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean("dynamic_island_notifications", enabled).apply()
     }
+
+    fun islandNotificationDurationMs(context: Context): Int =
+        prefs(context).getInt("island_notification_duration_ms", 4_800).coerceIn(1_000, 10_000)
+
+    fun setIslandNotificationDurationMs(context: Context, value: Int) {
+        prefs(context).edit().putInt("island_notification_duration_ms", value.coerceIn(1_000, 10_000)).apply()
+    }
+
+    fun islandNotificationPill(context: Context): Boolean =
+        prefs(context).getBoolean("island_notification_pill", false)
+
+    fun setIslandNotificationPill(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("island_notification_pill", enabled).apply()
+    }
+
+    fun islandHideSilentNotifications(context: Context): Boolean =
+        prefs(context).getBoolean("island_hide_silent_notifications", false)
+
+    fun setIslandHideSilentNotifications(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("island_hide_silent_notifications", enabled).apply()
+    }
+
+    fun islandBlockedNotificationApps(context: Context): Set<String> =
+        prefs(context).getStringSet("island_blocked_notification_apps", emptySet()).orEmpty()
+
+    fun setIslandBlockedNotificationApps(context: Context, packages: Set<String>) {
+        prefs(context).edit().putStringSet("island_blocked_notification_apps", packages.toSet()).apply()
+    }
+
+    fun islandNotificationHistoryEnabled(context: Context): Boolean =
+        prefs(context).getBoolean("island_notification_history", false)
+
+    fun setIslandNotificationHistoryEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("island_notification_history", enabled).apply()
+    }
+
+    fun acceptsIslandNotification(context: Context, pulse: NotificationPulse): Boolean =
+        dynamicIslandNotifications(context) &&
+            pulse.packageName !in islandBlockedNotificationApps(context) &&
+            !(pulse.silent && islandHideSilentNotifications(context))
 
     fun mainSpotlightMode(context: Context): Boolean =
         prefs(context).getBoolean("main_spotlight_mode", true)
