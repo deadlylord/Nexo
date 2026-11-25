@@ -28,6 +28,8 @@ import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Remove
@@ -51,6 +53,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.stree.nexo.QuickClipActivity
 import com.stree.nexo.R
 import com.stree.nexo.data.Haptics
 import com.stree.nexo.data.Prefs
@@ -63,7 +66,10 @@ import kotlin.math.roundToInt
 
 /** The same controls are embedded in carousel pages and opened by activator gestures. */
 @Composable
-internal fun ControlPanelPage(mode: String) {
+internal fun ControlPanelPage(
+    mode: String,
+    onDismiss: (() -> Unit)? = null
+) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -214,11 +220,30 @@ internal fun ControlPanelPage(mode: String) {
                 label = "soundOrTimer"
             ) { pickingTimer ->
                 if (!pickingTimer) {
+                    fun openQuickClipTab(tabMode: String) {
+                        Haptics.perform(context)
+                        runCatching {
+                            context.startActivity(
+                                Intent(context, QuickClipActivity::class.java)
+                                    .putExtra("mode", tabMode)
+                                    .addFlags(
+                                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                                            Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or
+                                            Intent.FLAG_ACTIVITY_NO_ANIMATION
+                                    )
+                            )
+                        }.onFailure {
+                            context.controlMessage("No se pudo abrir la tarjeta rápida")
+                        }
+                        onDismiss?.invoke()
+                    }
+
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         // Fila 1: Silencio, Vibrar y Sonido normal (solo iconos)
@@ -239,7 +264,7 @@ internal fun ControlPanelPage(mode: String) {
                                     Haptics.perform(context, strong = true)
                                     showTimerPicker = true
                                 },
-                                modifier = Modifier.weight(1f).height(64.dp)
+                                modifier = Modifier.weight(1f).height(52.dp)
                             ) {
                                 Haptics.perform(context)
                                 scope.launch {
@@ -261,7 +286,7 @@ internal fun ControlPanelPage(mode: String) {
                                 activeBorder = activeBorder,
                                 idleBg = idleBg,
                                 idleBorder = idleBorder,
-                                modifier = Modifier.weight(1f).height(64.dp)
+                                modifier = Modifier.weight(1f).height(52.dp)
                             ) {
                                 Haptics.perform(context)
                                 if (!SoundControl.enableVibrate(context)) {
@@ -279,7 +304,7 @@ internal fun ControlPanelPage(mode: String) {
                                 activeBorder = activeBorder,
                                 idleBg = idleBg,
                                 idleBorder = idleBorder,
-                                modifier = Modifier.weight(1f).height(64.dp)
+                                modifier = Modifier.weight(1f).height(52.dp)
                             ) {
                                 Haptics.perform(context)
                                 if (!SoundControl.restoreNormalSound(context)) {
@@ -304,7 +329,7 @@ internal fun ControlPanelPage(mode: String) {
                                 activeBorder = activeBorder,
                                 idleBg = idleBg,
                                 idleBorder = idleBorder,
-                                modifier = Modifier.weight(1f).height(64.dp)
+                                modifier = Modifier.weight(1f).height(52.dp)
                             ) {
                                 Haptics.perform(context)
                                 showTimerPicker = true
@@ -316,7 +341,7 @@ internal fun ControlPanelPage(mode: String) {
                                 iconBrush = iconBrush,
                                 bg = idleBg,
                                 border = themeSpec.outlineVariant.copy(alpha = 0.36f),
-                                modifier = Modifier.weight(1f).height(64.dp)
+                                modifier = Modifier.weight(1f).height(52.dp)
                             ) {
                                 Haptics.perform(context)
                                 val voice = Intent(Intent.ACTION_VIEW, Uri.parse("https://chatgpt.com/voice"))
@@ -330,6 +355,40 @@ internal fun ControlPanelPage(mode: String) {
                                         context.controlMessage("Instala ChatGPT para usar el asistente")
                                     }
                                 }
+                            }
+                        }
+
+                        // Fila 3: Capturas recientes y Portapapeles (QuickClip)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            ControlIconTile(
+                                icon = Icons.Filled.Image,
+                                contentDescription = "Capturas",
+                                active = false,
+                                iconBrush = iconBrush,
+                                activeBg = activeBg,
+                                activeBorder = activeBorder,
+                                idleBg = idleBg,
+                                idleBorder = idleBorder,
+                                modifier = Modifier.weight(1f).height(52.dp)
+                            ) {
+                                openQuickClipTab("screenshot")
+                            }
+
+                            ControlIconTile(
+                                icon = Icons.Filled.ContentPaste,
+                                contentDescription = "Portapapeles",
+                                active = false,
+                                iconBrush = iconBrush,
+                                activeBg = activeBg,
+                                activeBorder = activeBorder,
+                                idleBg = idleBg,
+                                idleBorder = idleBorder,
+                                modifier = Modifier.weight(1f).height(52.dp)
+                            ) {
+                                openQuickClipTab("clipboard")
                             }
                         }
                     }

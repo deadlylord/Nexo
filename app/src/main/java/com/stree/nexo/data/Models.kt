@@ -52,6 +52,7 @@ enum class EdgeGestureAction(val label: String, val description: String) {
     OPEN_BRIGHTNESS("Brillo", "Control rápido de brillo"),
     OPEN_VOLUME("Volumen", "Control rápido de audio"),
     TOGGLE_SILENT("Alternar silencio", "Pasa entre silencio y sonido normal"),
+    OPEN_NOTIFICATIONS("Bajar notificaciones", "Despliega la cortina de notificaciones del sistema"),
     OPEN_CLIPBOARD("Portapapeles y captura", "Abre la tarjeta de texto copiado y última captura"),
     LAST_APP("Última app", "Vuelve a la app anterior con vista previa del icono"),
     SYSTEM_BACK("Atrás (sistema)", "Vuelve atrás en la app actual"),

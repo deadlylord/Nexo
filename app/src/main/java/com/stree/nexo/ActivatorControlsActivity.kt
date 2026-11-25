@@ -144,7 +144,7 @@ class ActivatorControlsActivity : ComponentActivity() {
 
                                 // Tamaño compacto propio, independiente del panel principal.
                                 val panelWidth = minOf(maxWidth * 0.64f, 268.dp)
-                                val panelHeight = minOf(maxHeight * 0.35f, 286.dp).coerceAtLeast(242.dp)
+                                val panelHeight = minOf(maxHeight * 0.38f, 296.dp).coerceAtLeast(258.dp)
 
                                 val handleHeight = Prefs.activationHeight(this@ActivatorControlsActivity).dp
                                     .coerceAtMost((maxHeight - 56.dp).coerceAtLeast(48.dp))
@@ -190,7 +190,10 @@ class ActivatorControlsActivity : ComponentActivity() {
                                                 )
                                         ) {
                                             Box(Modifier.weight(1f).fillMaxWidth()) {
-                                                ControlPanelPage(modes[realIndex(page)])
+                                                ControlPanelPage(
+                                                    mode = modes[realIndex(page)],
+                                                    onDismiss = dismiss
+                                                )
                                             }
                                             if (modes.size > 1) {
                                                 HorizontalDivider(

@@ -1835,6 +1835,10 @@ class EdgePanelService : Service() {
             EdgeGestureAction.OPEN_BRIGHTNESS -> openControls("brightness")
             EdgeGestureAction.OPEN_VOLUME -> openControls("volume")
             EdgeGestureAction.TOGGLE_SILENT -> toggleSilent()
+            EdgeGestureAction.OPEN_NOTIFICATIONS -> {
+                Haptics.perform(this)
+                if (!SplitScreenService.openNotificationShade(this)) promptAccessibilityNeeded()
+            }
             EdgeGestureAction.OPEN_CLIPBOARD -> openQuickClip("clipboard")
             EdgeGestureAction.LAST_APP -> openLastApp()
             EdgeGestureAction.SYSTEM_BACK -> {

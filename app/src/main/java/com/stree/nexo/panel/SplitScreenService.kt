@@ -398,6 +398,21 @@ class SplitScreenService : AccessibilityService() {
         fun performToggleSplitScreen(): Boolean =
             runCatching { instance?.performGlobalAction(GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN) == true }.getOrDefault(false)
 
+        fun performOpenNotifications(): Boolean =
+            runCatching { instance?.performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS) == true }.getOrDefault(false)
+
+        @Suppress("WrongConstant", "PrivateApi")
+        fun openNotificationShade(context: Context): Boolean {
+            if (performOpenNotifications()) return true
+            return runCatching {
+                val service = context.getSystemService("statusbar") ?: return@runCatching false
+                val statusBarManager = Class.forName("android.app.StatusBarManager")
+                val expand = statusBarManager.getMethod("expandNotificationsPanel")
+                expand.invoke(service)
+                true
+            }.getOrDefault(false)
+        }
+
         fun launchSplitPair(context: Context, firstPackage: String, secondPackage: String): Boolean {
             if (instance != null) {
                 return launch(context, firstPackage, secondPackage)

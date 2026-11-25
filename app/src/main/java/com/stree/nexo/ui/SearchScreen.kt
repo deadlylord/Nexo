@@ -3,10 +3,15 @@ package com.stree.nexo.ui
 import android.app.Activity
 import android.content.Context
 import android.media.AudioManager
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.KeyEvent
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -74,7 +79,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.graphics.SolidColor
+import com.stree.nexo.QuickClipActivity
 import com.stree.nexo.data.PanelPage
+import com.stree.nexo.panel.SplitScreenService
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import androidx.compose.foundation.text.KeyboardOptions
@@ -93,10 +100,12 @@ import androidx.compose.material.icons.filled.BatterySaver
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.DeveloperMode
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Language
@@ -1504,10 +1513,98 @@ fun SearchPanel(
         }
     }
 
+    var notificationsPulled by remember { mutableStateOf(false) }
+    val triggerNotificationShade: () -> Unit = {
+        if (!notificationsPulled) {
+            notificationsPulled = true
+            Haptics.perform(context)
+            dismissPanel()
+            val appCtx = context.applicationContext
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (!SplitScreenService.openNotificationShade(appCtx)) {
+                    Toast.makeText(
+                        appCtx,
+                        "Activa Nexo en Accesibilidad para bajar notificaciones",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }, 120L)
+        }
+    }
+    val openQuickClip: (String) -> Unit = { clipMode ->
+        Haptics.perform(context)
+        runCatching {
+            context.startActivity(
+                Intent(context, QuickClipActivity::class.java)
+                    .putExtra("mode", clipMode)
+                    .addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or
+                            Intent.FLAG_ACTIVITY_NO_ANIMATION
+                    )
+            )
+        }.onFailure {
+            Toast.makeText(context, "No se pudo abrir la tarjeta rápida", Toast.LENGTH_SHORT).show()
+        }
+        dismissPanel()
+    }
+    val pullDownDensity = LocalDensity.current
+    val panelPullDownConnection = remember(pullDownDensity) {
+        val thresholdPx = with(pullDownDensity) { 72.dp.toPx() }
+        var pullAccumPx = 0f
+        object : NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (source == NestedScrollSource.UserInput) {
+                    if (consumed.y == 0f && available.y > 0f) {
+                        pullAccumPx += available.y
+                        if (pullAccumPx >= thresholdPx) {
+                            pullAccumPx = 0f
+                            triggerNotificationShade()
+                        }
+                    } else if (consumed.y != 0f || available.y < 0f) {
+                        pullAccumPx = 0f
+                    }
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPostFling(
+                consumed: androidx.compose.ui.unit.Velocity,
+                available: androidx.compose.ui.unit.Velocity
+            ): androidx.compose.ui.unit.Velocity {
+                pullAccumPx = 0f
+                return androidx.compose.ui.unit.Velocity.Zero
+            }
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = scrimAlpha))
+            .pointerInput(Unit) {
+                var dragY = 0f
+                val thresholdPx = 52.dp.toPx()
+                detectVerticalDragGestures(
+                    onDragStart = { dragY = 0f },
+                    onDragEnd = { dragY = 0f },
+                    onDragCancel = { dragY = 0f }
+                ) { _, dragAmount ->
+                    if (dragAmount > 0f) {
+                        dragY += dragAmount
+                        if (dragY >= thresholdPx) {
+                            dragY = 0f
+                            triggerNotificationShade()
+                        }
+                    } else {
+                        dragY = 0f
+                    }
+                }
+            }
             .clickable(
                 interactionSource = scrimInteraction,
                 indication = null,
@@ -1609,6 +1706,7 @@ fun SearchPanel(
                             wrapHeight = false,
                             modifier = Modifier
                                 .fillMaxSize()
+                                .nestedScroll(panelPullDownConnection)
                                 .clickable(
                                     interactionSource = remember { MutableInteractionSource() },
                                     indication = null,
@@ -1618,9 +1716,43 @@ fun SearchPanel(
                             Column(
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .padding(top = 6.dp)
                                     .padding(horizontal = 6.dp)
                             ) {
+                                // Zona superior discreta: deslizar abajo baja la cortina de notificaciones
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(14.dp)
+                                        .pointerInput(Unit) {
+                                            var dragY = 0f
+                                            val thresholdPx = 36.dp.toPx()
+                                            detectVerticalDragGestures(
+                                                onDragStart = { dragY = 0f },
+                                                onDragEnd = { dragY = 0f },
+                                                onDragCancel = { dragY = 0f }
+                                            ) { _, dragAmount ->
+                                                if (dragAmount > 0f) {
+                                                    dragY += dragAmount
+                                                    if (dragY >= thresholdPx) {
+                                                        dragY = 0f
+                                                        triggerNotificationShade()
+                                                    }
+                                                } else {
+                                                    dragY = 0f
+                                                }
+                                            }
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(34.dp)
+                                            .height(3.dp)
+                                            .clip(CircleShape)
+                                            .background(themeSpec.onSurfaceVariant.copy(alpha = 0.28f))
+                                    )
+                                }
+
                                 if (state.query.isNotBlank()) {
                                     AiAskChipsRow(
                                         accent = themeSpec.primary,
@@ -1692,6 +1824,7 @@ fun SearchPanel(
                                                     state = state,
                                                     onItemClick = launchPanelItem,
                                                     onOpenSettings = onOpenSettings,
+                                                    onOpenQuickClip = openQuickClip,
                                                     onOpenFloating = onOpenFloating,
                                                     onItemLongClick = { actionItemSlot = null; actionItem = it },
                                                     columns = panelColumns,
@@ -2058,7 +2191,8 @@ private fun PanelFooter(
 private data class QuickEntry(
     val label: String,
     val icon: ImageVector,
-    val item: SearchItem?
+    val item: SearchItem?,
+    val action: (() -> Unit)? = null
 )
 
 @Composable
@@ -2238,6 +2372,7 @@ private fun QuickSettingsPage(
     state: SearchUiState,
     onItemClick: (SearchItem) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenQuickClip: (String) -> Unit = {},
     onOpenFloating: (SearchItem) -> Unit = {},
     onItemLongClick: (SearchItem) -> Unit = {},
     columns: Int = 5,
@@ -2257,6 +2392,8 @@ private fun QuickSettingsPage(
     }
 
     val entries = buildList {
+        add(QuickEntry("Capturas", Icons.Filled.Image, null) { onOpenQuickClip("screenshot") })
+        add(QuickEntry("Portapapeles", Icons.Filled.ContentPaste, null) { onOpenQuickClip("clipboard") })
         ordered.forEachIndexed { index, item ->
             add(
                 QuickEntry(
@@ -2323,10 +2460,10 @@ private fun QuickSettingsPage(
                 showLabel = showLabels,
                 iconScale = iconScale
             ) {
-                if (entry.item != null) {
-                    onItemClick(entry.item)
-                } else {
-                    onOpenSettings()
+                when {
+                    entry.action != null -> entry.action.invoke()
+                    entry.item != null -> onItemClick(entry.item)
+                    else -> onOpenSettings()
                 }
             }
         }
