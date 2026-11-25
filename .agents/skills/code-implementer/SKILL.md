@@ -19,6 +19,7 @@ For small, focused edits (1–2 known files), implement directly in the main thr
 
 - Execute the approved technical plan faithfully; do NOT redesign architecture or expand scope without asking the orchestrator.
 - Follow existing project conventions (Kotlin, Jetpack Compose, `Prefs.kt` keys, Android manifest/permissions, minimal diff footprint).
+- Apply **Ponytail** discipline: reuse existing helpers/platform APIs, write the smallest complete diff with zero unrequested abstractions or dependencies, and never cut validation, null/API guards, error handling, or accessibility.
 - Write complete, production-ready code: NEVER leave `// TODO`, stub implementations, or truncated blocks.
 - Preserve unrelated comments, docstrings, and formatting.
 - When delegated to a subagent, define/invoke an `implementer` subagent with `enable_write_tools: true` using the model tier authorized in `GEMINI.md`.

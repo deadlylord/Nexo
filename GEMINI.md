@@ -57,7 +57,7 @@ Para cualquier cambio de código en la app:
 
 No cargues skills con `lookup_skill` salvo que apliquen directamente a la tarea actual:
 
-- **Activos en el flujo de Nexo:** `explore-codebase`, `code-implementer`, `github`.
+- **Activos en el flujo de Nexo:** `explore-codebase`, `code-implementer`, `ponytail` (always-on abajo), `github`.
 - **Útiles puntualmente (bajo costo):**
   - `work-unit-commits`: cuando una feature toque muchos archivos y convenga dividirla en commits atómicos/reversibles.
   - `cognitive-doc-design`: al escribir o resumir docs, README o planes largos para mantenerlos cortos y escaneables.
@@ -65,3 +65,17 @@ No cargues skills con `lookup_skill` salvo que apliquen directamente a la tarea 
   - `judgment-day`: revisión dual con 2 jueces únicamente si el usuario pide *"juzgar"* o *"dual review"* en cambios críticos de sistema Android.
   - `unslop`: únicamente sus principios visuales adaptados a Compose si el usuario pide pulir/rediseñar estética de una pantalla.
 - **Ignorar siempre en Nexo (no cargar):** skills de Web/Vercel/React/Go o herramientas externas (`vercel-*`, `deploy-to-vercel`, `web-app-development`, `go-testing`, `chained-pr`, `skill-registry`).
+
+## 6. Disciplina Ponytail (Always-On — Ahorro de Salida y Cero Sobre-Ingeniería)
+
+Aplica por defecto en modo `full` (el usuario puede pedir `ponytail lite`, `ultra` u `off`):
+
+1. **Escalera antes de escribir código (detente en el primer escalón que funcione):**
+   1) ¿Hace falta que exista? Omite extras/opciones no pedidas y menciónalas en una línea.
+   2) ¿Ya existe en Nexo (helper, componente Compose, `Prefs`, servicio)? Reutilízalo.
+   3) ¿Lo resuelve Kotlin stdlib o la plataforma Android nativa? Úsalo antes de reinventarlo.
+   4) ¿Ya existe en una dependencia instalada? Nunca agregues una librería por unas pocas líneas.
+   5) Mínimo diff completo y claro que resuelva el problema real (borrar código sobrante > añadir capas).
+2. **Sin wrappers ni abstracciones "por si acaso":** corrige bugs en su causa raíz tras revisar todos sus callers; comenta solo el *por qué* en una línea.
+3. **Nunca recortar:** validaciones, manejo de errores/null-safety, seguridad, permisos/API guards (`SDK_INT`), accesibilidad ni calibración de hardware real (Isla Dinámica, overlays, gestos).
+4. **Cierre conciso:** menciona en 1–2 líneas si quedó algo fuera de alcance o algún riesgo relevante para probar en el teléfono.
