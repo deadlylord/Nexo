@@ -1757,6 +1757,63 @@ private fun DynamicIslandCard() {
 
         if (enabled) {
             SectionDivider()
+            val accActive = com.stree.nexo.panel.SplitScreenService.isRunning()
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = if (accActive) Color(0xFF10B981).copy(alpha = 0.14f)
+                else MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                border = BorderStroke(
+                    0.8.dp,
+                    if (accActive) Color(0xFF10B981).copy(alpha = 0.45f)
+                    else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = if (accActive) "Capa sobre barra de estado activa"
+                            else "Activa Accesibilidad para abrir en todas las apps",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (accActive) Color(0xFF34D399) else MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (accActive) {
+                                "La isla se dibuja por encima de la barra de estado y responde al toque dentro de cualquier app."
+                            } else {
+                                "En Android 12+, activar Nexo en Accesibilidad permite tocar la cámara incluso dentro de otras apps."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (!accActive) {
+                        FilledTonalButton(
+                            onClick = {
+                                Haptics.perform(context)
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text("Activar", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+            }
             SwitchRow(
                 title = "Acceso táctil en la cámara en reposo",
                 subtitle = "Permite tocar la zona de la cámara en reposo para desplegar el Hub rápido",

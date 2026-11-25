@@ -93,6 +93,8 @@ class EdgePanelService : Service() {
     // Isla Dinámica superior (OLED negra)
     private var islandView: DynamicIslandView? = null
     private var islandParams: WindowManager.LayoutParams? = null
+    private var islandWindowManager: WindowManager? = null
+    private var islandUsingAccessibilityOverlay = false
     private var islandTemporaryAlert = false
     private var islandMediaExpanded = false
     private var islandHubExpanded = false
@@ -583,12 +585,15 @@ class EdgePanelService : Service() {
 
     private fun setupDynamicIsland() {
         removeDynamicIsland()
-        if (!Settings.canDrawOverlays(this) || !Prefs.dynamicIslandEnabled(this)) return
+        val accWm = SplitScreenService.overlayWindowManager()
+        val canAttachOverlay = accWm != null || Settings.canDrawOverlays(this)
+        if (!canAttachOverlay || !Prefs.dynamicIslandEnabled(this)) return
 
         val params = WindowManager.LayoutParams(
             dp(Prefs.dynamicIslandIdleWidth(this)),
             dp(Prefs.dynamicIslandIdleHeight(this)),
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            if (accWm != null) WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+            else WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
@@ -601,6 +606,7 @@ class EdgePanelService : Service() {
             // Imprescindible para flotar y recibir toques sobre la barra de estado y cámara en TODAS las apps
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                fitInsetsTypes = 0
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
@@ -695,17 +701,43 @@ class EdgePanelService : Service() {
                     }
                 }
                 override fun onHubAction(action: IslandHubAction) = handleHubAction(action)
+                override fun onOutsideTouch() {
+                    if (islandMediaExpanded || islandHubExpanded || islandNotificationExpanded) {
+                        collapseIslandExpansion()
+                    }
+                }
             }
         }
 
         islandView = view
         islandParams = params
-        runCatching {
-            windowManager.addView(view, params)
+
+        // Preferir TYPE_ACCESSIBILITY_OVERLAY (queda por encima de la barra de estado en TODAS las apps)
+        var attached = false
+        if (accWm != null) {
+            attached = runCatching {
+                accWm.addView(view, params)
+                islandWindowManager = accWm
+                islandUsingAccessibilityOverlay = true
+                true
+            }.getOrDefault(false)
+        }
+        if (!attached && Settings.canDrawOverlays(this)) {
+            params.type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            attached = runCatching {
+                windowManager.addView(view, params)
+                islandWindowManager = windowManager
+                islandUsingAccessibilityOverlay = false
+                true
+            }.getOrDefault(false)
+        }
+        if (attached) {
             refreshIslandIdleState()
-        }.onFailure {
+        } else {
             islandView = null
             islandParams = null
+            islandWindowManager = null
+            islandUsingAccessibilityOverlay = false
         }
     }
 
@@ -718,10 +750,15 @@ class EdgePanelService : Service() {
         islandMediaExpanded = false
         islandHubExpanded = false
         islandNotificationExpanded = false
-        val view = islandView ?: return
-        runCatching { windowManager.removeView(view) }
+        val view = islandView
+        val hostWm = islandWindowManager ?: windowManager
         islandView = null
         islandParams = null
+        islandWindowManager = null
+        islandUsingAccessibilityOverlay = false
+        if (view != null) {
+            runCatching { hostWm.removeView(view) }
+        }
     }
 
     private fun collapseIslandExpansion() {
@@ -1065,24 +1102,39 @@ class EdgePanelService : Service() {
                 targetMode = finalState.mode,
                 sat = finalState.satellite,
                 hideIdleVisual = finalState.hideIdleVisual,
-                calibrationGuide = finalState.calibrationGuide
+                calibrationGuide = finalState.calibrationGuide,
+                aboveStatusBar = islandUsingAccessibilityOverlay
             )
         )
         val targetH = dp(
             view.desiredHeightDp(
                 targetMode = finalState.mode,
                 hideIdleVisual = finalState.hideIdleVisual,
-                calibrationGuide = finalState.calibrationGuide
+                calibrationGuide = finalState.calibrationGuide,
+                aboveStatusBar = islandUsingAccessibilityOverlay
             )
         )
         val targetX = dp(Prefs.dynamicIslandHorizontalOffset(this))
         val targetY = dp(Prefs.dynamicIslandTopOffset(this))
-        if (params.width != targetW || params.height != targetH || params.x != targetX || params.y != targetY) {
+        val isExpanded = finalState.mode == IslandMode.EXPANDED_MEDIA ||
+            finalState.mode == IslandMode.EXPANDED_HUB ||
+            finalState.mode == IslandMode.EXPANDED_NOTIFICATION
+        val baseFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        val targetFlags = if (isExpanded) {
+            baseFlags or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+        } else {
+            baseFlags
+        }
+        if (params.width != targetW || params.height != targetH || params.x != targetX || params.y != targetY || params.flags != targetFlags) {
             params.width = targetW
             params.height = targetH
             params.x = targetX
             params.y = targetY
-            runCatching { windowManager.updateViewLayout(view, params) }
+            params.flags = targetFlags
+            runCatching { (islandWindowManager ?: windowManager).updateViewLayout(view, params) }
         }
         if (view.visibility != View.VISIBLE) {
             view.visibility = View.VISIBLE
@@ -2431,6 +2483,14 @@ class EdgePanelService : Service() {
             instance?.let { service ->
                 service.gestureHandler.post {
                     service.refreshIslandIdleState()
+                }
+            }
+        }
+
+        fun reattachDynamicIsland(context: Context) {
+            instance?.let { service ->
+                service.gestureHandler.post {
+                    service.setupDynamicIsland()
                 }
             }
         }

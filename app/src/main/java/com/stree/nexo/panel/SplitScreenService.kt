@@ -39,7 +39,8 @@ class SplitScreenService : AccessibilityService() {
 
     override fun onServiceConnected() {
         instance = this
-        com.stree.nexo.panel.EdgePanelService.syncFloatingBubble(applicationContext)
+        EdgePanelService.syncFloatingBubble(applicationContext)
+        EdgePanelService.reattachDynamicIsland(applicationContext)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -368,6 +369,7 @@ class SplitScreenService : AccessibilityService() {
         clearPending()
         if (instance === this) instance = null
         EdgePanelService.syncFloatingBubble(applicationContext)
+        EdgePanelService.reattachDynamicIsland(applicationContext)
         super.onDestroy()
     }
 
@@ -378,6 +380,9 @@ class SplitScreenService : AccessibilityService() {
         private var instance: SplitScreenService? = null
 
         fun isRunning(): Boolean = instance != null
+
+        fun overlayWindowManager(): WindowManager? =
+            runCatching { instance?.getSystemService(WindowManager::class.java) }.getOrNull()
 
         fun performBack(): Boolean =
             runCatching { instance?.performGlobalAction(GLOBAL_ACTION_BACK) == true }.getOrDefault(false)

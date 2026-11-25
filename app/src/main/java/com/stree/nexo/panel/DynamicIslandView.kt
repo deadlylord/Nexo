@@ -115,6 +115,7 @@ interface IslandInteractionListener {
     fun onNotificationOpenFloating()
     fun onNotificationQuickAction(index: Int)
     fun onHubAction(action: IslandHubAction)
+    fun onOutsideTouch()
 }
 
 /**
@@ -227,11 +228,19 @@ class DynamicIslandView(context: Context) : View(context) {
                 targetMode == IslandMode.SILENT_TIMER
             )
 
+    private fun statusBarHeightDp(): Int {
+        val resId = context.resources.getIdentifier("status_bar_height", "dimen", "android")
+        if (resId <= 0) return 32
+        val density = context.resources.displayMetrics.density.coerceAtLeast(1f)
+        return (context.resources.getDimensionPixelSize(resId) / density).toInt().coerceIn(24, 54)
+    }
+
     fun desiredWidthDp(
         targetMode: IslandMode = state.mode,
         sat: IslandSatellite = state.satellite,
         hideIdleVisual: Boolean = state.hideIdleVisual,
-        calibrationGuide: Boolean = state.calibrationGuide
+        calibrationGuide: Boolean = state.calibrationGuide,
+        aboveStatusBar: Boolean = true
     ): Int {
         val camGap = Prefs.dynamicIslandCameraGap(context)
         val idleW = Prefs.dynamicIslandIdleWidth(context)
@@ -239,7 +248,7 @@ class DynamicIslandView(context: Context) : View(context) {
         val base = when (targetMode) {
             IslandMode.HIDDEN -> 1
             IslandMode.IDLE_PILL -> if (hideIdleVisual && !calibrationGuide) {
-                idleW.coerceAtLeast(38)
+                idleW.coerceAtLeast(if (aboveStatusBar) 40 else 54)
             } else {
                 idleW
             }
@@ -263,7 +272,8 @@ class DynamicIslandView(context: Context) : View(context) {
     fun desiredHeightDp(
         targetMode: IslandMode = state.mode,
         hideIdleVisual: Boolean = state.hideIdleVisual,
-        calibrationGuide: Boolean = state.calibrationGuide
+        calibrationGuide: Boolean = state.calibrationGuide,
+        aboveStatusBar: Boolean = true
     ): Int {
         val idleH = Prefs.dynamicIslandIdleHeight(context)
         val topSafe = cameraTopSafeDp()
@@ -272,7 +282,12 @@ class DynamicIslandView(context: Context) : View(context) {
         return when (targetMode) {
             IslandMode.HIDDEN -> 1
             IslandMode.IDLE_PILL -> if (hideIdleVisual && !calibrationGuide) {
-                idleH.coerceAtLeast(32)
+                if (aboveStatusBar) {
+                    idleH.coerceAtLeast(34)
+                } else {
+                    val reachBelowBar = statusBarHeightDp() - Prefs.dynamicIslandTopOffset(context) + 12
+                    maxOf(idleH, reachBelowBar).coerceIn(36, 56)
+                }
             } else {
                 idleH
             }
@@ -444,6 +459,10 @@ class DynamicIslandView(context: Context) : View(context) {
                 handleTap(event.x, event.y)
                 return true
             }
+            MotionEvent.ACTION_OUTSIDE -> {
+                listener?.onOutsideTouch()
+                return true
+            }
             MotionEvent.ACTION_CANCEL -> {
                 touchHandler.removeCallbacks(longPressRunnable)
                 isSeeking = false
@@ -507,10 +526,13 @@ class DynamicIslandView(context: Context) : View(context) {
         super.onDraw(canvas)
         if (state.mode == IslandMode.HIDDEN || width <= 2 || height <= 2) return
 
-        // En reposo oculto detrás de la cámara: totalmente invisible pero mantiene zona táctil sobre el lente
+        // En reposo oculto detrás de la cámara: imperceptible (alpha 1/255) para que InputDispatcher
+        // siga entregando toques sobre la cámara en TODAS las apps sin mostrar ninguna barra negra extra.
         if (state.mode == IslandMode.IDLE_PILL && state.hideIdleVisual && !state.calibrationGuide) {
             pillRect.set(0f, 0f, width.toFloat(), height.toFloat())
             satelliteRect.setEmpty()
+            bgPaint.color = Color.argb(1, 0, 0, 0)
+            canvas.drawRoundRect(pillRect, pillRect.height() / 2f, pillRect.height() / 2f, bgPaint)
             return
         }
 
