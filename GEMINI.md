@@ -52,3 +52,16 @@ Para cualquier cambio de código en la app:
 3. **CI / APK:** vigilar el workflow `APK` en GitHub Actions con `gh run watch` hasta confirmar `success`.
 4. **Entrega al usuario:** responder de forma concisa en **español**, incluir enlaces clicables `file://` a los archivos modificados y entregar el enlace directo del APK cuando haya compilación nueva:
    `https://github.com/deadlylord/Nexo/releases/download/dev-latest/Nexo-debug.apk`
+
+## 5. Política de Skills Instalados (Ahorro de Tokens)
+
+No cargues skills con `lookup_skill` salvo que apliquen directamente a la tarea actual:
+
+- **Activos en el flujo de Nexo:** `explore-codebase`, `code-implementer`, `github`.
+- **Útiles puntualmente (bajo costo):**
+  - `work-unit-commits`: cuando una feature toque muchos archivos y convenga dividirla en commits atómicos/reversibles.
+  - `cognitive-doc-design`: al escribir o resumir docs, README o planes largos para mantenerlos cortos y escaneables.
+- **Solo bajo petición explícita del usuario (consumen muchos tokens):**
+  - `judgment-day`: revisión dual con 2 jueces únicamente si el usuario pide *"juzgar"* o *"dual review"* en cambios críticos de sistema Android.
+  - `unslop`: únicamente sus principios visuales adaptados a Compose si el usuario pide pulir/rediseñar estética de una pantalla.
+- **Ignorar siempre en Nexo (no cargar):** skills de Web/Vercel/React/Go o herramientas externas (`vercel-*`, `deploy-to-vercel`, `web-app-development`, `go-testing`, `chained-pr`, `skill-registry`).
