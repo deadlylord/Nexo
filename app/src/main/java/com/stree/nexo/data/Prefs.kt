@@ -219,39 +219,67 @@ object Prefs {
         prefs(context).edit().putBoolean("dynamic_island_idle_pill", enabled).apply()
     }
 
+    fun dynamicIslandHideBehindCamera(context: Context): Boolean =
+        prefs(context).getBoolean("dynamic_island_hide_behind_camera", true)
+
+    fun setDynamicIslandHideBehindCamera(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("dynamic_island_hide_behind_camera", enabled).apply()
+    }
+
     fun dynamicIslandTopOffset(context: Context): Int =
-        prefs(context).getInt("dynamic_island_top_offset", 8).coerceIn(0, 48)
+        prefs(context).getInt("dynamic_island_top_offset", 8).coerceIn(-6, 64)
 
     fun setDynamicIslandTopOffset(context: Context, offsetDp: Int) {
-        prefs(context).edit().putInt("dynamic_island_top_offset", offsetDp.coerceIn(0, 48)).apply()
+        prefs(context).edit().putInt("dynamic_island_top_offset", offsetDp.coerceIn(-6, 64)).apply()
     }
 
     fun dynamicIslandHorizontalOffset(context: Context): Int =
-        prefs(context).getInt("dynamic_island_x_offset", 0).coerceIn(-64, 64)
+        prefs(context).getInt("dynamic_island_x_offset", 0).coerceIn(-120, 120)
 
     fun setDynamicIslandHorizontalOffset(context: Context, offsetDp: Int) {
-        prefs(context).edit().putInt("dynamic_island_x_offset", offsetDp.coerceIn(-64, 64)).apply()
+        prefs(context).edit().putInt("dynamic_island_x_offset", offsetDp.coerceIn(-120, 120)).apply()
     }
 
     fun dynamicIslandIdleWidth(context: Context): Int =
-        prefs(context).getInt("dynamic_island_idle_width", 96).coerceIn(64, 152)
+        prefs(context).getInt("dynamic_island_idle_width", 26).coerceIn(16, 180)
 
     fun setDynamicIslandIdleWidth(context: Context, widthDp: Int) {
-        prefs(context).edit().putInt("dynamic_island_idle_width", widthDp.coerceIn(64, 152)).apply()
+        prefs(context).edit().putInt("dynamic_island_idle_width", widthDp.coerceIn(16, 180)).apply()
     }
 
     fun dynamicIslandIdleHeight(context: Context): Int =
-        prefs(context).getInt("dynamic_island_idle_height", 28).coerceIn(22, 40)
+        prefs(context).getInt("dynamic_island_idle_height", 24).coerceIn(16, 48)
 
     fun setDynamicIslandIdleHeight(context: Context, heightDp: Int) {
-        prefs(context).edit().putInt("dynamic_island_idle_height", heightDp.coerceIn(22, 40)).apply()
+        prefs(context).edit().putInt("dynamic_island_idle_height", heightDp.coerceIn(16, 48)).apply()
+    }
+
+    fun dynamicIslandCompactHeight(context: Context): Int =
+        prefs(context).getInt("dynamic_island_compact_height", 36).coerceIn(26, 52)
+
+    fun setDynamicIslandCompactHeight(context: Context, heightDp: Int) {
+        prefs(context).edit().putInt("dynamic_island_compact_height", heightDp.coerceIn(26, 52)).apply()
+    }
+
+    fun dynamicIslandExpandedWidth(context: Context): Int =
+        prefs(context).getInt("dynamic_island_expanded_width", 336).coerceIn(250, 390)
+
+    fun setDynamicIslandExpandedWidth(context: Context, widthDp: Int) {
+        prefs(context).edit().putInt("dynamic_island_expanded_width", widthDp.coerceIn(250, 390)).apply()
+    }
+
+    fun dynamicIslandExpandedHeight(context: Context): Int =
+        prefs(context).getInt("dynamic_island_expanded_height", 138).coerceIn(112, 210)
+
+    fun setDynamicIslandExpandedHeight(context: Context, heightDp: Int) {
+        prefs(context).edit().putInt("dynamic_island_expanded_height", heightDp.coerceIn(112, 210)).apply()
     }
 
     fun dynamicIslandCameraGap(context: Context): Int =
-        prefs(context).getInt("dynamic_island_camera_gap", 36).coerceIn(0, 68)
+        prefs(context).getInt("dynamic_island_camera_gap", 32).coerceIn(0, 72)
 
     fun setDynamicIslandCameraGap(context: Context, gapDp: Int) {
-        prefs(context).edit().putInt("dynamic_island_camera_gap", gapDp.coerceIn(0, 68)).apply()
+        prefs(context).edit().putInt("dynamic_island_camera_gap", gapDp.coerceIn(0, 72)).apply()
     }
 
     fun dynamicIslandHideLandscape(context: Context): Boolean =
@@ -263,6 +291,13 @@ object Prefs {
 
     fun dynamicIslandMedia(context: Context): Boolean =
         prefs(context).getBoolean("dynamic_island_media", true)
+
+    fun dynamicIslandMediaKeepPaused(context: Context): Boolean =
+        prefs(context).getBoolean("dynamic_island_media_keep_paused", true)
+
+    fun setDynamicIslandMediaKeepPaused(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("dynamic_island_media_keep_paused", enabled).apply()
+    }
 
     fun setDynamicIslandMedia(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean("dynamic_island_media", enabled).apply()

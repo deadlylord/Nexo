@@ -1593,25 +1593,39 @@ private fun DynamicIslandCard() {
     val hostView = LocalView.current
     var enabled by remember { mutableStateOf(Prefs.dynamicIslandEnabled(context)) }
     var idlePill by remember { mutableStateOf(Prefs.dynamicIslandIdlePill(context)) }
+    var hideBehindCamera by remember { mutableStateOf(Prefs.dynamicIslandHideBehindCamera(context)) }
     var media by remember { mutableStateOf(Prefs.dynamicIslandMedia(context)) }
+    var mediaKeepPaused by remember { mutableStateOf(Prefs.dynamicIslandMediaKeepPaused(context)) }
     var notifications by remember { mutableStateOf(Prefs.dynamicIslandNotifications(context)) }
     var hideLandscape by remember { mutableStateOf(Prefs.dynamicIslandHideLandscape(context)) }
-    var liveGuide by remember { mutableStateOf(false) }
+    var previewMode by remember { mutableStateOf(com.stree.nexo.panel.IslandCalibrationMode.OFF) }
 
-    var topOffset by remember { mutableFloatStateOf(Prefs.dynamicIslandTopOffset(context).toFloat()) }
-    var xOffset by remember { mutableFloatStateOf(Prefs.dynamicIslandHorizontalOffset(context).toFloat()) }
-    var cameraGap by remember { mutableFloatStateOf(Prefs.dynamicIslandCameraGap(context).toFloat()) }
-    var idleWidth by remember { mutableFloatStateOf(Prefs.dynamicIslandIdleWidth(context).toFloat()) }
-    var idleHeight by remember { mutableFloatStateOf(Prefs.dynamicIslandIdleHeight(context).toFloat()) }
+    var topOffset by remember { mutableIntStateOf(Prefs.dynamicIslandTopOffset(context)) }
+    var xOffset by remember { mutableIntStateOf(Prefs.dynamicIslandHorizontalOffset(context)) }
+    var cameraGap by remember { mutableIntStateOf(Prefs.dynamicIslandCameraGap(context)) }
+    var idleWidth by remember { mutableIntStateOf(Prefs.dynamicIslandIdleWidth(context)) }
+    var idleHeight by remember { mutableIntStateOf(Prefs.dynamicIslandIdleHeight(context)) }
+    var compactHeight by remember { mutableIntStateOf(Prefs.dynamicIslandCompactHeight(context)) }
+    var expandedWidth by remember { mutableIntStateOf(Prefs.dynamicIslandExpandedWidth(context)) }
+    var expandedHeight by remember { mutableIntStateOf(Prefs.dynamicIslandExpandedHeight(context)) }
 
     DisposableEffect(Unit) {
         onDispose {
-            EdgePanelService.setIslandCalibrationPreview(false)
+            EdgePanelService.setIslandCalibrationMode(com.stree.nexo.panel.IslandCalibrationMode.OFF)
         }
     }
 
     val themeSpec = remember(Prefs.themeRevision) {
         Prefs.panelStyle(context).visualSpec(light = false)
+    }
+
+    fun ensureLivePreview(preferred: com.stree.nexo.panel.IslandCalibrationMode) {
+        if (previewMode != preferred) {
+            previewMode = preferred
+            EdgePanelService.setIslandCalibrationMode(preferred)
+        } else {
+            EdgePanelService.refreshIslandLive()
+        }
     }
 
     val detectCameraCutout: () -> Unit = {
@@ -1625,37 +1639,36 @@ private fun DynamicIslandCard() {
         } else null
 
         if (rect != null && rect.width() > 0 && rect.height() > 0) {
-            val topDp = (rect.top / density).roundToInt().coerceIn(0, 48)
-            val centerOffsetDp = ((rect.centerX() - screenW / 2f) / density).roundToInt().coerceIn(-64, 64)
+            val topDp = (rect.top / density).roundToInt().coerceIn(-6, 64)
+            val centerOffsetDp = ((rect.centerX() - screenW / 2f) / density).roundToInt().coerceIn(-120, 120)
             val holeWidthDp = (rect.width() / density).roundToInt()
             val holeHeightDp = (rect.height() / density).roundToInt()
-            val safeGapDp = (holeWidthDp + 10).coerceIn(20, 68)
-            val pillW = (safeGapDp + 44).coerceIn(76, 140)
-            val pillH = (holeHeightDp + 6).coerceIn(24, 38)
+            val safeGapDp = (holeWidthDp + 8).coerceIn(18, 72)
+            val pillW = holeWidthDp.coerceIn(16, 48)
+            val pillH = holeHeightDp.coerceIn(16, 42)
 
-            topOffset = topDp.toFloat()
-            xOffset = centerOffsetDp.toFloat()
-            cameraGap = safeGapDp.toFloat()
-            idleWidth = pillW.toFloat()
-            idleHeight = pillH.toFloat()
+            topOffset = topDp
+            xOffset = centerOffsetDp
+            cameraGap = safeGapDp
+            idleWidth = pillW
+            idleHeight = pillH
 
             Prefs.setDynamicIslandTopOffset(context, topDp)
             Prefs.setDynamicIslandHorizontalOffset(context, centerOffsetDp)
             Prefs.setDynamicIslandCameraGap(context, safeGapDp)
             Prefs.setDynamicIslandIdleWidth(context, pillW)
             Prefs.setDynamicIslandIdleHeight(context, pillH)
-            liveGuide = true
-            EdgePanelService.setIslandCalibrationPreview(true)
-            EdgePanelService.refresh(context)
+            previewMode = com.stree.nexo.panel.IslandCalibrationMode.IDLE
+            EdgePanelService.setIslandCalibrationMode(com.stree.nexo.panel.IslandCalibrationMode.IDLE)
             Toast.makeText(context, "Cámara detectada (${holeWidthDp}×${holeHeightDp} dp)", Toast.LENGTH_SHORT).show()
         } else {
-            Toast.makeText(context, "No se detectó recorte de cámara; ajusta manualmente con la guía en vivo", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "No se detectó recorte de cámara; ajusta manualmente con la vista previa en vivo", Toast.LENGTH_LONG).show()
         }
     }
 
     SettingsSectionCard(
         title = "Isla Dinámica OLED",
-        subtitle = "Negro puro fundido con la cámara · Música, silencio/vibrar, llamadas, carga, Bluetooth y Hub",
+        subtitle = "Oculta tras la cámara en reposo · Reproductor interactivo, notificaciones y ajuste exacto",
         icon = Icons.Filled.Layers,
         badgeText = if (enabled) "Activa" else "Inactiva",
         badgeActive = enabled
@@ -1696,7 +1709,6 @@ private fun DynamicIslandCard() {
                             modifier = Modifier.size(13.dp)
                         )
                     }
-                    // Lente físico de la cámara en el centro (sin texto encima)
                     Box(
                         modifier = Modifier
                             .size(18.dp)
@@ -1730,14 +1742,14 @@ private fun DynamicIslandCard() {
 
         SwitchRow(
             title = "Activar Isla Dinámica OLED",
-            subtitle = "Funciona sobre todas las apps: música, silencio/vibración/normal, llamadas, carga, Bluetooth y Hub",
+            subtitle = "Funciona sobre todas las apps: música interactiva, silencio, llamadas, carga, Bluetooth y Hub",
             checked = enabled,
             onCheckedChange = {
                 enabled = it
                 Prefs.setDynamicIslandEnabled(context, it)
                 if (!it) {
-                    liveGuide = false
-                    EdgePanelService.setIslandCalibrationPreview(false)
+                    previewMode = com.stree.nexo.panel.IslandCalibrationMode.OFF
+                    EdgePanelService.setIslandCalibrationMode(com.stree.nexo.panel.IslandCalibrationMode.OFF)
                 }
                 EdgePanelService.refresh(context)
             }
@@ -1746,15 +1758,27 @@ private fun DynamicIslandCard() {
         if (enabled) {
             SectionDivider()
             SwitchRow(
-                title = "Cápsula siempre visible sobre la cámara",
-                subtitle = "Toca la cápsula negra en reposo para abrir el Hub rápido (Spotlight, Linterna, Sonido, Captura, Cronómetro)",
+                title = "Acceso táctil en la cámara en reposo",
+                subtitle = "Permite tocar la zona de la cámara en reposo para desplegar el Hub rápido",
                 checked = idlePill,
                 onCheckedChange = {
                     idlePill = it
                     Prefs.setDynamicIslandIdlePill(context, it)
-                    EdgePanelService.refresh(context)
+                    EdgePanelService.refreshIslandLive()
                 }
             )
+            if (idlePill) {
+                SwitchRow(
+                    title = "Ocultar detrás de la cámara en reposo",
+                    subtitle = "No muestra ninguna barra negra extra al estar inactiva, pero tocar la cámara sigue abriendo el Hub",
+                    checked = hideBehindCamera,
+                    onCheckedChange = {
+                        hideBehindCamera = it
+                        Prefs.setDynamicIslandHideBehindCamera(context, it)
+                        EdgePanelService.refreshIslandLive()
+                    }
+                )
+            }
             SwitchRow(
                 title = "Notificaciones interactivas",
                 subtitle = "Toque corto abre en ventana flotante; mantener pulsado o deslizar abajo lee y muestra acciones",
@@ -1762,19 +1786,30 @@ private fun DynamicIslandCard() {
                 onCheckedChange = {
                     notifications = it
                     Prefs.setDynamicIslandNotifications(context, it)
-                    EdgePanelService.refresh(context)
+                    EdgePanelService.refreshIslandLive()
                 }
             )
             SwitchRow(
-                title = "Reproductor en vivo (se cierra al pausar)",
-                subtitle = "Carátula del álbum, barra de progreso real y controles; vuelve a reposo al pausar",
+                title = "Reproductor de música interactivo",
+                subtitle = "Barra táctil para adelantar/retroceder, color dinámico según carátula, -10s/+10s, deslizar para cambiar y botón flotante",
                 checked = media,
                 onCheckedChange = {
                     media = it
                     Prefs.setDynamicIslandMedia(context, it)
-                    EdgePanelService.refresh(context)
+                    EdgePanelService.refreshIslandLive()
                 }
             )
+            if (media) {
+                SwitchRow(
+                    title = "Mantener reproductor al pausar",
+                    subtitle = "Conserva la cápsula de música accesible un momento tras pausar en lugar de ocultarla de inmediato",
+                    checked = mediaKeepPaused,
+                    onCheckedChange = {
+                        mediaKeepPaused = it
+                        Prefs.setDynamicIslandMediaKeepPaused(context, it)
+                    }
+                )
+            }
             SwitchRow(
                 title = "Ocultar automáticamente en horizontal",
                 subtitle = "Desaparece al ver videos o jugar en pantalla horizontal",
@@ -1782,23 +1817,63 @@ private fun DynamicIslandCard() {
                 onCheckedChange = {
                     hideLandscape = it
                     Prefs.setDynamicIslandHideLandscape(context, it)
-                    EdgePanelService.refresh(context)
+                    EdgePanelService.refreshIslandLive()
                 }
             )
 
             SectionDivider()
 
-            SwitchRow(
-                title = "Ver guía en vivo sobre tu cámara",
-                subtitle = "Muestra la isla real arriba con un aro guía azul para alinearla con tu lente físico",
-                checked = liveGuide,
-                onCheckedChange = {
-                    liveGuide = it
-                    EdgePanelService.setIslandCalibrationPreview(it)
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Text(
+                    text = "VISTA PREVIA EN VIVO SOBRE TU CÁMARA",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    letterSpacing = 0.8.sp
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val modes = listOf(
+                        com.stree.nexo.panel.IslandCalibrationMode.OFF to "Off",
+                        com.stree.nexo.panel.IslandCalibrationMode.IDLE to "Reposo",
+                        com.stree.nexo.panel.IslandCalibrationMode.COMPACT to "Compacta",
+                        com.stree.nexo.panel.IslandCalibrationMode.EXPANDED to "Expandida"
+                    )
+                    modes.forEach { (m, label) ->
+                        val selected = previewMode == m
+                        Surface(
+                            onClick = {
+                                Haptics.perform(context)
+                                previewMode = m
+                                EdgePanelService.setIslandCalibrationMode(m)
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            border = BorderStroke(
+                                1.dp,
+                                if (selected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+                            ),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp)
+                            )
+                        }
+                    }
                 }
-            )
 
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+                Spacer(Modifier.height(10.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1819,32 +1894,39 @@ private fun DynamicIslandCard() {
                     }
                 }
 
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(10.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "AJUSTE FINO DEL HUECO DE CÁMARA",
+                        text = "POSICIÓN Y TAMAÑO EXACTO (EN TIEMPO REAL)",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary,
-                        letterSpacing = 0.8.sp
+                        letterSpacing = 0.6.sp
                     )
                     TextButton(
                         onClick = {
-                            topOffset = 8f
-                            xOffset = 0f
-                            cameraGap = 36f
-                            idleWidth = 96f
-                            idleHeight = 28f
+                            Haptics.perform(context)
+                            topOffset = 8
+                            xOffset = 0
+                            cameraGap = 32
+                            idleWidth = 26
+                            idleHeight = 24
+                            compactHeight = 36
+                            expandedWidth = 336
+                            expandedHeight = 138
                             Prefs.setDynamicIslandTopOffset(context, 8)
                             Prefs.setDynamicIslandHorizontalOffset(context, 0)
-                            Prefs.setDynamicIslandCameraGap(context, 36)
-                            Prefs.setDynamicIslandIdleWidth(context, 96)
-                            Prefs.setDynamicIslandIdleHeight(context, 28)
-                            EdgePanelService.refresh(context)
+                            Prefs.setDynamicIslandCameraGap(context, 32)
+                            Prefs.setDynamicIslandIdleWidth(context, 26)
+                            Prefs.setDynamicIslandIdleHeight(context, 24)
+                            Prefs.setDynamicIslandCompactHeight(context, 36)
+                            Prefs.setDynamicIslandExpandedWidth(context, 336)
+                            Prefs.setDynamicIslandExpandedHeight(context, 138)
+                            EdgePanelService.refreshIslandLive()
                         },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                     ) {
@@ -1852,80 +1934,186 @@ private fun DynamicIslandCard() {
                     }
                 }
 
-                SteppedSlider(
-                    label = "Espacio central para la cámara",
-                    valueText = "${cameraGap.roundToInt()} dp",
-                    value = cameraGap,
-                    valueRange = 0f..68f,
-                    stepAmount = 2f,
-                    onValueChange = {
-                        cameraGap = it
-                        Prefs.setDynamicIslandCameraGap(context, it.roundToInt())
-                        if (liveGuide) EdgePanelService.setIslandCalibrationPreview(true)
-                    },
-                    onValueChangeFinished = {
-                        Prefs.setDynamicIslandCameraGap(context, cameraGap.roundToInt())
-                        EdgePanelService.refresh(context)
-                    }
-                )
-                SteppedSlider(
+                FineTuneSlider(
                     label = "Posición vertical (Y)",
-                    valueText = "${topOffset.roundToInt()} dp",
                     value = topOffset,
-                    valueRange = 0f..48f,
-                    stepAmount = 1f,
-                    onValueChange = {
-                        topOffset = it
-                        Prefs.setDynamicIslandTopOffset(context, it.roundToInt())
-                        if (liveGuide) EdgePanelService.setIslandCalibrationPreview(true)
-                    },
-                    onValueChangeFinished = {
-                        Prefs.setDynamicIslandTopOffset(context, topOffset.roundToInt())
-                        EdgePanelService.refresh(context)
-                    }
-                )
-                SteppedSlider(
+                    min = -6,
+                    max = 64,
+                    step = 1
+                ) { v ->
+                    topOffset = v
+                    Prefs.setDynamicIslandTopOffset(context, v)
+                    ensureLivePreview(if (previewMode == com.stree.nexo.panel.IslandCalibrationMode.OFF) com.stree.nexo.panel.IslandCalibrationMode.IDLE else previewMode)
+                }
+
+                FineTuneSlider(
                     label = "Posición horizontal (X)",
-                    valueText = "${xOffset.roundToInt()} dp",
                     value = xOffset,
-                    valueRange = -64f..64f,
-                    stepAmount = 2f,
-                    onValueChange = {
-                        xOffset = it
-                        Prefs.setDynamicIslandHorizontalOffset(context, it.roundToInt())
-                        if (liveGuide) EdgePanelService.setIslandCalibrationPreview(true)
-                    },
-                    onValueChangeFinished = {
-                        Prefs.setDynamicIslandHorizontalOffset(context, xOffset.roundToInt())
-                        EdgePanelService.refresh(context)
-                    }
-                )
-                SteppedSlider(
+                    min = -120,
+                    max = 120,
+                    step = 1
+                ) { v ->
+                    xOffset = v
+                    Prefs.setDynamicIslandHorizontalOffset(context, v)
+                    ensureLivePreview(if (previewMode == com.stree.nexo.panel.IslandCalibrationMode.OFF) com.stree.nexo.panel.IslandCalibrationMode.IDLE else previewMode)
+                }
+
+                FineTuneSlider(
+                    label = "Espacio central para la cámara",
+                    value = cameraGap,
+                    min = 0,
+                    max = 72,
+                    step = 1
+                ) { v ->
+                    cameraGap = v
+                    Prefs.setDynamicIslandCameraGap(context, v)
+                    ensureLivePreview(com.stree.nexo.panel.IslandCalibrationMode.COMPACT)
+                }
+
+                FineTuneSlider(
                     label = "Ancho en reposo",
-                    valueText = "${idleWidth.roundToInt()} dp",
                     value = idleWidth,
-                    valueRange = 64f..152f,
-                    stepAmount = 4f,
-                    onValueChange = { idleWidth = it },
-                    onValueChangeFinished = {
-                        Prefs.setDynamicIslandIdleWidth(context, idleWidth.roundToInt())
-                        EdgePanelService.refresh(context)
-                    }
-                )
-                SteppedSlider(
+                    min = 16,
+                    max = 180,
+                    step = 1
+                ) { v ->
+                    idleWidth = v
+                    Prefs.setDynamicIslandIdleWidth(context, v)
+                    ensureLivePreview(com.stree.nexo.panel.IslandCalibrationMode.IDLE)
+                }
+
+                FineTuneSlider(
                     label = "Alto en reposo",
-                    valueText = "${idleHeight.roundToInt()} dp",
                     value = idleHeight,
-                    valueRange = 22f..40f,
-                    stepAmount = 1f,
-                    onValueChange = { idleHeight = it },
-                    onValueChangeFinished = {
-                        Prefs.setDynamicIslandIdleHeight(context, idleHeight.roundToInt())
-                        EdgePanelService.refresh(context)
-                    }
-                )
+                    min = 16,
+                    max = 48,
+                    step = 1
+                ) { v ->
+                    idleHeight = v
+                    Prefs.setDynamicIslandIdleHeight(context, v)
+                    ensureLivePreview(com.stree.nexo.panel.IslandCalibrationMode.IDLE)
+                }
+
+                FineTuneSlider(
+                    label = "Alto compacto activo",
+                    value = compactHeight,
+                    min = 26,
+                    max = 52,
+                    step = 1
+                ) { v ->
+                    compactHeight = v
+                    Prefs.setDynamicIslandCompactHeight(context, v)
+                    ensureLivePreview(com.stree.nexo.panel.IslandCalibrationMode.COMPACT)
+                }
+
+                FineTuneSlider(
+                    label = "Ancho expandido (reproductor / Hub)",
+                    value = expandedWidth,
+                    min = 250,
+                    max = 390,
+                    step = 2
+                ) { v ->
+                    expandedWidth = v
+                    Prefs.setDynamicIslandExpandedWidth(context, v)
+                    ensureLivePreview(com.stree.nexo.panel.IslandCalibrationMode.EXPANDED)
+                }
+
+                FineTuneSlider(
+                    label = "Alto expandido (reproductor / Hub)",
+                    value = expandedHeight,
+                    min = 112,
+                    max = 210,
+                    step = 2
+                ) { v ->
+                    expandedHeight = v
+                    Prefs.setDynamicIslandExpandedHeight(context, v)
+                    ensureLivePreview(com.stree.nexo.panel.IslandCalibrationMode.EXPANDED)
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun FineTuneSlider(
+    label: String,
+    value: Int,
+    min: Int,
+    max: Int,
+    step: Int = 1,
+    onChange: (Int) -> Unit
+) {
+    val context = LocalContext.current
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(6.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Surface(
+                    onClick = {
+                        val next = (value - step).coerceIn(min, max)
+                        if (next != value) {
+                            Haptics.perform(context)
+                            onChange(next)
+                        }
+                    },
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+                    modifier = Modifier.size(26.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text("−", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Text(
+                    text = "$value dp",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.width(46.dp)
+                )
+                Surface(
+                    onClick = {
+                        val next = (value + step).coerceIn(min, max)
+                        if (next != value) {
+                            Haptics.perform(context)
+                            onChange(next)
+                        }
+                    },
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+                    modifier = Modifier.size(26.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text("+", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+        Slider(
+            value = value.toFloat().coerceIn(min.toFloat(), max.toFloat()),
+            onValueChange = { raw ->
+                val snapped = (((raw - min) / step).roundToInt() * step + min).coerceIn(min, max)
+                if (snapped != value) onChange(snapped)
+            },
+            valueRange = min.toFloat()..max.toFloat(),
+            modifier = Modifier.fillMaxWidth().height(28.dp)
+        )
     }
 }
 

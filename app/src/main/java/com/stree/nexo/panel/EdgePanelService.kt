@@ -317,17 +317,24 @@ class EdgePanelService : Service() {
         }
     }
 
+    private var cachedArtKey: Int = 0
+    private var cachedArtPalette: Pair<Int, Int>? = null
+
     private val islandLiveTickRunnable = object : Runnable {
         override fun run() {
-            val mode = islandView?.mode ?: return
+            val view = islandView ?: return
+            val mode = view.mode
             val needsFastTick = mode == IslandMode.EXPANDED_MEDIA ||
                 mode == IslandMode.CALL ||
                 mode == IslandMode.STOPWATCH ||
                 (mode == IslandMode.EXPANDED_HUB && stopwatchRunning)
             val needsSlowTick = mode == IslandMode.SILENT_TIMER
             if (needsFastTick) {
-                refreshIslandIdleState()
-                gestureHandler.postDelayed(this, 1_000L)
+                if (!view.isUserSeeking) {
+                    refreshIslandIdleState()
+                }
+                val interval = if (mode == IslandMode.EXPANDED_MEDIA) 500L else 1_000L
+                gestureHandler.postDelayed(this, interval)
             } else if (needsSlowTick) {
                 refreshIslandIdleState()
                 gestureHandler.postDelayed(this, 30_000L)
@@ -557,8 +564,12 @@ class EdgePanelService : Service() {
                         mediaHiddenWhilePaused = false
                     }
                     else -> {
-                        // Al pausar, cerrar suavemente la vista de música tras una breve pausa
-                        val hideDelay = if (islandMediaExpanded) 3_200L else 1_800L
+                        val keepPaused = Prefs.dynamicIslandMediaKeepPaused(this@EdgePanelService)
+                        val hideDelay = when {
+                            keepPaused -> 45_000L
+                            islandMediaExpanded -> 3_200L
+                            else -> 1_800L
+                        }
                         gestureHandler.postDelayed(mediaPauseHideRunnable, hideDelay)
                     }
                 }
@@ -606,7 +617,7 @@ class EdgePanelService : Service() {
                 override fun onMediaPrev() {
                     Haptics.perform(this@EdgePanelService)
                     currentPlayback?.controller?.transportControls?.skipToPrevious()
-                    scheduleExpandAutoCollapse(6_500L)
+                    scheduleExpandAutoCollapse(8_000L)
                 }
                 override fun onMediaPlayPause() {
                     Haptics.perform(this@EdgePanelService)
@@ -614,19 +625,46 @@ class EdgePanelService : Service() {
                     if (now.playing) {
                         now.controller.transportControls.pause()
                         gestureHandler.removeCallbacks(mediaPauseHideRunnable)
-                        gestureHandler.postDelayed(mediaPauseHideRunnable, 2_500L)
+                        val delay = if (Prefs.dynamicIslandMediaKeepPaused(this@EdgePanelService)) 45_000L else 2_500L
+                        gestureHandler.postDelayed(mediaPauseHideRunnable, delay)
+                        scheduleExpandAutoCollapse(8_000L)
                     } else {
                         mediaHiddenWhilePaused = false
                         now.controller.transportControls.play()
-                        scheduleExpandAutoCollapse(6_500L)
+                        scheduleExpandAutoCollapse(8_000L)
                     }
                 }
                 override fun onMediaNext() {
                     Haptics.perform(this@EdgePanelService)
                     currentPlayback?.controller?.transportControls?.skipToNext()
-                    scheduleExpandAutoCollapse(6_500L)
+                    scheduleExpandAutoCollapse(8_000L)
+                }
+                override fun onMediaSeekTo(fraction: Float) {
+                    val now = currentPlayback ?: return
+                    if (now.durationMs <= 0L) return
+                    Haptics.perform(this@EdgePanelService)
+                    val targetMs = (now.durationMs * fraction.coerceIn(0f, 1f)).toLong()
+                    runCatching { now.controller.transportControls.seekTo(targetMs) }
+                    scheduleExpandAutoCollapse(8_000L)
+                }
+                override fun onMediaSeekBy(deltaMs: Long) {
+                    val now = currentPlayback ?: return
+                    Haptics.perform(this@EdgePanelService)
+                    val currentPos = computeCurrentPlaybackPositionMs(now)
+                    val targetMs = if (now.durationMs > 0L) {
+                        (currentPos + deltaMs).coerceIn(0L, now.durationMs)
+                    } else {
+                        (currentPos + deltaMs).coerceAtLeast(0L)
+                    }
+                    runCatching { now.controller.transportControls.seekTo(targetMs) }
+                    scheduleExpandAutoCollapse(8_000L)
                 }
                 override fun onMediaOpenApp() {
+                    Haptics.perform(this@EdgePanelService)
+                    collapseIslandExpansion()
+                    MediaControlService.openPlayingApp(this@EdgePanelService)
+                }
+                override fun onMediaOpenFloating() {
                     Haptics.perform(this@EdgePanelService)
                     collapseIslandExpansion()
                     val pkg = currentPlayback?.packageName
@@ -637,6 +675,11 @@ class EdgePanelService : Service() {
                     } else {
                         MediaControlService.openPlayingApp(this@EdgePanelService)
                     }
+                }
+                override fun onMediaSwipeSkip(next: Boolean) {
+                    Haptics.perform(this@EdgePanelService)
+                    val controls = currentPlayback?.controller?.transportControls ?: return
+                    if (next) controls.skipToNext() else controls.skipToPrevious()
                 }
                 override fun onNotificationOpenFloating() {
                     collapseIslandAllTemp()
@@ -765,7 +808,12 @@ class EdgePanelService : Service() {
             refreshIslandIdleState()
         } else if (islandView?.mode == IslandMode.STOPWATCH) {
             if (Prefs.dynamicIslandIdlePill(this)) {
-                renderIsland(IslandDisplayState(mode = IslandMode.IDLE_PILL))
+                renderIsland(
+                    IslandDisplayState(
+                        mode = IslandMode.IDLE_PILL,
+                        hideIdleVisual = Prefs.dynamicIslandHideBehindCamera(this)
+                    )
+                )
             } else {
                 renderIsland(IslandDisplayState(mode = IslandMode.HIDDEN))
             }
@@ -933,8 +981,67 @@ class EdgePanelService : Service() {
     private fun canShowIsland(): Boolean {
         if (!Prefs.dynamicIslandEnabled(this)) return false
         if (isLandscapeHidden()) return false
-        if (calibrationPreviewActive) return true
+        if (calibrationMode != IslandCalibrationMode.OFF) return true
         return !hostUiVisible && !panelUiVisible
+    }
+
+    private fun computeCurrentPlaybackPositionMs(playing: NowPlaying): Long {
+        return if (playing.playing) {
+            val delta = (SystemClock.elapsedRealtime() - playing.positionUpdateTimeMs).coerceAtLeast(0L)
+            (playing.positionMs + (delta * playing.playbackSpeed).toLong()).coerceAtLeast(0L)
+        } else {
+            playing.positionMs
+        }
+    }
+
+    /** Extrae un par de colores vibrantes (primario y secundario) desde la carátula del álbum para OLED. */
+    private fun extractAlbumPalette(bmp: Bitmap?): Pair<Int, Int>? {
+        if (bmp == null || bmp.isRecycled || bmp.width <= 0 || bmp.height <= 0) return null
+        val key = System.identityHashCode(bmp)
+        if (key == cachedArtKey) return cachedArtPalette
+        val palette = runCatching {
+            val stepX = (bmp.width / 10).coerceAtLeast(1)
+            val stepY = (bmp.height / 10).coerceAtLeast(1)
+            val hsv = FloatArray(3)
+            var bestScore = -1f
+            var bestH = 0f
+            var bestS = 0f
+            var bestV = 0f
+            var x = stepX / 2
+            while (x < bmp.width) {
+                var y = stepY / 2
+                while (y < bmp.height) {
+                    val pixel = bmp.getPixel(x, y)
+                    if (android.graphics.Color.alpha(pixel) >= 180) {
+                        android.graphics.Color.colorToHSV(pixel, hsv)
+                        val sat = hsv[1]
+                        val bri = hsv[2]
+                        if (bri in 0.22f..0.98f && sat >= 0.20f) {
+                            val score = sat * 1.4f + bri * 0.6f
+                            if (score > bestScore) {
+                                bestScore = score
+                                bestH = hsv[0]
+                                bestS = sat
+                                bestV = bri
+                            }
+                        }
+                    }
+                    y += stepY
+                }
+                x += stepX
+            }
+            if (bestScore < 0f) return@runCatching null
+            val primary = android.graphics.Color.HSVToColor(
+                floatArrayOf(bestH, bestS.coerceIn(0.50f, 0.90f), bestV.coerceIn(0.76f, 0.98f))
+            )
+            val secondary = android.graphics.Color.HSVToColor(
+                floatArrayOf((bestH + 34f) % 360f, (bestS * 0.92f).coerceIn(0.45f, 0.88f), (bestV * 1.04f).coerceIn(0.78f, 0.98f))
+            )
+            primary to secondary
+        }.getOrNull()
+        cachedArtKey = key
+        cachedArtPalette = palette
+        return palette
     }
 
     private fun renderIsland(displayState: IslandDisplayState) {
@@ -947,14 +1054,27 @@ class EdgePanelService : Service() {
             return
         }
 
-        val finalState = if (calibrationPreviewActive) {
+        val finalState = if (calibrationMode != IslandCalibrationMode.OFF) {
             displayState.copy(calibrationGuide = true)
         } else {
             displayState
         }
 
-        val targetW = dp(view.desiredWidthDp(finalState.mode, finalState.satellite))
-        val targetH = dp(view.desiredHeightDp(finalState.mode))
+        val targetW = dp(
+            view.desiredWidthDp(
+                targetMode = finalState.mode,
+                sat = finalState.satellite,
+                hideIdleVisual = finalState.hideIdleVisual,
+                calibrationGuide = finalState.calibrationGuide
+            )
+        )
+        val targetH = dp(
+            view.desiredHeightDp(
+                targetMode = finalState.mode,
+                hideIdleVisual = finalState.hideIdleVisual,
+                calibrationGuide = finalState.calibrationGuide
+            )
+        )
         val targetX = dp(Prefs.dynamicIslandHorizontalOffset(this))
         val targetY = dp(Prefs.dynamicIslandTopOffset(this))
         if (params.width != targetW || params.height != targetH || params.x != targetX || params.y != targetY) {
@@ -971,7 +1091,9 @@ class EdgePanelService : Service() {
 
         gestureHandler.removeCallbacks(islandLiveTickRunnable)
         when (finalState.mode) {
-            IslandMode.EXPANDED_MEDIA, IslandMode.CALL, IslandMode.STOPWATCH ->
+            IslandMode.EXPANDED_MEDIA ->
+                gestureHandler.postDelayed(islandLiveTickRunnable, 500L)
+            IslandMode.CALL, IslandMode.STOPWATCH ->
                 gestureHandler.postDelayed(islandLiveTickRunnable, 1_000L)
             IslandMode.EXPANDED_HUB ->
                 if (stopwatchRunning) gestureHandler.postDelayed(islandLiveTickRunnable, 1_000L)
@@ -1007,13 +1129,9 @@ class EdgePanelService : Service() {
     private fun buildMediaDisplayState(expanded: Boolean, satellite: IslandSatellite, satIcon: Bitmap?): IslandDisplayState {
         val playing = currentPlayback!!
         val art = playing.albumArt ?: currentPlaybackIcon
+        val palette = extractAlbumPalette(art)
         val duration = playing.durationMs
-        val currentPos = if (playing.playing) {
-            val delta = (SystemClock.elapsedRealtime() - playing.positionUpdateTimeMs).coerceAtLeast(0L)
-            (playing.positionMs + (delta * playing.playbackSpeed).toLong()).coerceAtLeast(0L)
-        } else {
-            playing.positionMs
-        }
+        val currentPos = computeCurrentPlaybackPositionMs(playing)
         val clampedPos = if (duration > 0L) currentPos.coerceAtMost(duration) else currentPos
         val fraction = if (duration > 0L) (clampedPos.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f
 
@@ -1022,10 +1140,13 @@ class EdgePanelService : Service() {
             title = playing.title,
             subtitle = playing.artist,
             icon = art,
+            accentColor = palette?.first,
+            secondaryAccentColor = palette?.second,
             playing = playing.playing,
             progressFraction = fraction,
             progressLeftText = if (duration > 0L) formatMmSs(clampedPos) else "",
             progressRightText = if (duration > 0L) formatMmSs(duration) else "",
+            mediaDurationMs = duration,
             satellite = if (expanded) IslandSatellite.NONE else satellite,
             satelliteIcon = if (expanded) null else satIcon
         )
@@ -1039,16 +1160,49 @@ class EdgePanelService : Service() {
         }
         if (islandTemporaryAlert || islandNotificationExpanded) return
 
-        // Modo calibración desde Ajustes: muestra la cápsula con aro guía sobre la cámara real
-        if (calibrationPreviewActive) {
-            renderIsland(
-                IslandDisplayState(
-                    mode = IslandMode.RINGER_MODE,
-                    ringerMode = getSystemService(AudioManager::class.java)?.ringerMode ?: AudioManager.RINGER_MODE_NORMAL,
-                    calibrationGuide = true
+        // Modo calibración en vivo desde Ajustes: Reposo (cámara), Compacta o Expandida
+        when (calibrationMode) {
+            IslandCalibrationMode.IDLE -> {
+                renderIsland(
+                    IslandDisplayState(
+                        mode = IslandMode.IDLE_PILL,
+                        hideIdleVisual = Prefs.dynamicIslandHideBehindCamera(this),
+                        calibrationGuide = true
+                    )
                 )
-            )
-            return
+                return
+            }
+            IslandCalibrationMode.COMPACT -> {
+                renderIsland(
+                    IslandDisplayState(
+                        mode = IslandMode.RINGER_MODE,
+                        ringerMode = getSystemService(AudioManager::class.java)?.ringerMode ?: AudioManager.RINGER_MODE_NORMAL,
+                        calibrationGuide = true
+                    )
+                )
+                return
+            }
+            IslandCalibrationMode.EXPANDED -> {
+                val previewState = if (currentPlayback != null) {
+                    buildMediaDisplayState(expanded = true, satellite = IslandSatellite.NONE, satIcon = null)
+                        .copy(calibrationGuide = true)
+                } else {
+                    IslandDisplayState(
+                        mode = IslandMode.EXPANDED_MEDIA,
+                        title = "Vista previa de tamaño",
+                        subtitle = "Arrastra la barra o ajusta el ancho/alto",
+                        playing = true,
+                        progressFraction = 0.42f,
+                        progressLeftText = "1:28",
+                        progressRightText = "3:30",
+                        mediaDurationMs = 210_000L,
+                        calibrationGuide = true
+                    )
+                }
+                renderIsland(previewState)
+                return
+            }
+            IslandCalibrationMode.OFF -> Unit
         }
 
         // 1. Hub rápido expandido
@@ -1162,9 +1316,14 @@ class EdgePanelService : Service() {
             return
         }
 
-        // 7. Cápsula negra OLED mínima sobre la cámara en reposo
+        // 7. Cápsula mínima o zona táctil invisible sobre la cámara en reposo
         if (Prefs.dynamicIslandIdlePill(this)) {
-            renderIsland(IslandDisplayState(mode = IslandMode.IDLE_PILL))
+            renderIsland(
+                IslandDisplayState(
+                    mode = IslandMode.IDLE_PILL,
+                    hideIdleVisual = Prefs.dynamicIslandHideBehindCamera(this)
+                )
+            )
             return
         }
 
@@ -2114,7 +2273,7 @@ class EdgePanelService : Service() {
             islandHubExpanded = false
             islandNotificationExpanded = false
             handleView?.collapseToIdle { setOverlayExpanded(false) }
-            if (calibrationPreviewActive) {
+            if (calibrationMode != IslandCalibrationMode.OFF) {
                 refreshIslandIdleState()
             } else {
                 renderIsland(IslandDisplayState(mode = IslandMode.HIDDEN))
@@ -2249,10 +2408,14 @@ class EdgePanelService : Service() {
         private var panelUiVisible = false
 
         @Volatile
-        private var calibrationPreviewActive = false
+        private var calibrationMode: IslandCalibrationMode = IslandCalibrationMode.OFF
 
         fun setIslandCalibrationPreview(active: Boolean) {
-            calibrationPreviewActive = active
+            setIslandCalibrationMode(if (active) IslandCalibrationMode.IDLE else IslandCalibrationMode.OFF)
+        }
+
+        fun setIslandCalibrationMode(mode: IslandCalibrationMode) {
+            calibrationMode = mode
             instance?.let { service ->
                 service.gestureHandler.post {
                     service.islandTemporaryAlert = false
@@ -2264,11 +2427,19 @@ class EdgePanelService : Service() {
             }
         }
 
+        fun refreshIslandLive() {
+            instance?.let { service ->
+                service.gestureHandler.post {
+                    service.refreshIslandIdleState()
+                }
+            }
+        }
+
         fun triggerIslandTestAlert(context: Context) {
             val service = instance ?: return
             service.gestureHandler.post {
-                val prev = calibrationPreviewActive
-                calibrationPreviewActive = true
+                val prev = calibrationMode
+                calibrationMode = IslandCalibrationMode.COMPACT
                 service.showIslandAlert(
                     IslandDisplayState(
                         mode = IslandMode.NOTIFICATION,
@@ -2279,7 +2450,7 @@ class EdgePanelService : Service() {
                     durationMs = 4_000L
                 )
                 service.gestureHandler.postDelayed({
-                    calibrationPreviewActive = prev
+                    calibrationMode = prev
                     service.refreshIslandIdleState()
                 }, 4_100L)
             }

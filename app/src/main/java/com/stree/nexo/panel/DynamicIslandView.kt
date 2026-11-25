@@ -54,6 +54,13 @@ enum class IslandSatellite {
     NOTIFICATION
 }
 
+enum class IslandCalibrationMode {
+    OFF,
+    IDLE,
+    COMPACT,
+    EXPANDED
+}
+
 enum class IslandHubAction {
     SPOTLIGHT,
     FLASHLIGHT,
@@ -72,10 +79,12 @@ data class IslandDisplayState(
     val badge: String = "",
     val icon: Bitmap? = null,
     val accentColor: Int? = null,
+    val secondaryAccentColor: Int? = null,
     val playing: Boolean = false,
     val progressFraction: Float = 0f,
     val progressLeftText: String = "",
     val progressRightText: String = "",
+    val mediaDurationMs: Long = 0L,
     val batteryPercent: Int = 0,
     val ringerMode: Int = AudioManager.RINGER_MODE_NORMAL,
     val notificationActionLabels: List<String> = emptyList(),
@@ -85,6 +94,7 @@ data class IslandDisplayState(
     val silentOn: Boolean = false,
     val stopwatchRunning: Boolean = false,
     val stopwatchLabel: String = "00:00",
+    val hideIdleVisual: Boolean = false,
     val calibrationGuide: Boolean = false
 )
 
@@ -97,7 +107,11 @@ interface IslandInteractionListener {
     fun onMediaPrev()
     fun onMediaPlayPause()
     fun onMediaNext()
+    fun onMediaSeekTo(fraction: Float)
+    fun onMediaSeekBy(deltaMs: Long)
     fun onMediaOpenApp()
+    fun onMediaOpenFloating()
+    fun onMediaSwipeSkip(next: Boolean)
     fun onNotificationOpenFloating()
     fun onNotificationQuickAction(index: Int)
     fun onHubAction(action: IslandHubAction)
@@ -129,9 +143,14 @@ class DynamicIslandView(context: Context) : View(context) {
     private var gestureHandled = false
     private var swipedUp = false
     private var swipedDown = false
+    private var swipedLeft = false
+    private var swipedRight = false
+    private var isSeeking = false
+    private var seekPreviewFraction = 0f
+    val isUserSeeking: Boolean get() = isSeeking
 
     private val longPressRunnable = Runnable {
-        if (!gestureHandled && !swipedUp && !swipedDown) {
+        if (!gestureHandled && !swipedUp && !swipedDown && !swipedLeft && !swipedRight && !isSeeking) {
             gestureHandled = true
             animate().scaleX(1f).scaleY(1f).setDuration(90).start()
             listener?.onLongPress(state.mode)
@@ -141,10 +160,15 @@ class DynamicIslandView(context: Context) : View(context) {
     // Hit-boxes interactivos
     private val pillRect = RectF()
     private val satelliteRect = RectF()
+    private val rewindRect = RectF()
     private val prevRect = RectF()
     private val playRect = RectF()
     private val nextRect = RectF()
+    private val forwardRect = RectF()
     private val mediaHeaderRect = RectF()
+    private val mediaFloatRect = RectF()
+    private val seekBarRect = RectF()
+    private val seekBarHitRect = RectF()
     private val notifFloatBtnRect = RectF()
     private val notifActionRects = Array(2) { RectF() }
     private val hubTileRects = Array(5) { RectF() }
@@ -156,7 +180,7 @@ class DynamicIslandView(context: Context) : View(context) {
         style = Paint.Style.FILL
     }
     private val guidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(190, 56, 189, 248)
+        color = Color.argb(200, 56, 189, 248)
         style = Paint.Style.STROKE
         pathEffect = DashPathEffect(floatArrayOf(8f, 6f), 0f)
     }
@@ -192,7 +216,7 @@ class DynamicIslandView(context: Context) : View(context) {
     private fun cameraTopSafeDp(): Int {
         val gap = Prefs.dynamicIslandCameraGap(context)
         if (gap <= 0) return 8
-        return (Prefs.dynamicIslandIdleHeight(context) + 4).coerceIn(26, 42)
+        return (Prefs.dynamicIslandIdleHeight(context) + 4).coerceIn(22, 46)
     }
 
     private fun hasSatellite(targetMode: IslandMode = state.mode, sat: IslandSatellite = state.satellite): Boolean =
@@ -205,36 +229,53 @@ class DynamicIslandView(context: Context) : View(context) {
 
     fun desiredWidthDp(
         targetMode: IslandMode = state.mode,
-        sat: IslandSatellite = state.satellite
+        sat: IslandSatellite = state.satellite,
+        hideIdleVisual: Boolean = state.hideIdleVisual,
+        calibrationGuide: Boolean = state.calibrationGuide
     ): Int {
         val camGap = Prefs.dynamicIslandCameraGap(context)
+        val idleW = Prefs.dynamicIslandIdleWidth(context)
+        val expW = Prefs.dynamicIslandExpandedWidth(context)
         val base = when (targetMode) {
             IslandMode.HIDDEN -> 1
-            IslandMode.IDLE_PILL -> Prefs.dynamicIslandIdleWidth(context).coerceAtLeast(camGap + 24)
-            IslandMode.COMPACT_MEDIA -> (camGap + 124).coerceIn(156, 240)
-            IslandMode.RINGER_MODE -> (camGap + 168).coerceIn(188, 268)
-            IslandMode.CHARGING -> (camGap + 148).coerceIn(174, 252)
-            IslandMode.STOPWATCH -> (camGap + 150).coerceIn(174, 252)
-            IslandMode.SILENT_TIMER -> (camGap + 156).coerceIn(178, 258)
-            IslandMode.CALL -> (camGap + 158).coerceIn(180, 262)
-            IslandMode.BLUETOOTH -> 252
-            IslandMode.CLIPBOARD -> 236
-            IslandMode.SCREENSHOT -> 244
-            IslandMode.NOTIFICATION -> 296
-            IslandMode.EXPANDED_MEDIA -> 334
-            IslandMode.EXPANDED_NOTIFICATION -> 334
-            IslandMode.EXPANDED_HUB -> 334
+            IslandMode.IDLE_PILL -> if (hideIdleVisual && !calibrationGuide) {
+                idleW.coerceAtLeast(38)
+            } else {
+                idleW
+            }
+            IslandMode.COMPACT_MEDIA -> (camGap + 124).coerceIn(148, 252)
+            IslandMode.RINGER_MODE -> (camGap + 168).coerceIn(184, 276)
+            IslandMode.CHARGING -> (camGap + 148).coerceIn(170, 260)
+            IslandMode.STOPWATCH -> (camGap + 150).coerceIn(170, 260)
+            IslandMode.SILENT_TIMER -> (camGap + 156).coerceIn(174, 266)
+            IslandMode.CALL -> (camGap + 158).coerceIn(176, 268)
+            IslandMode.BLUETOOTH -> (expW * 0.78f).toInt().coerceIn(220, 310)
+            IslandMode.CLIPBOARD -> (expW * 0.74f).toInt().coerceIn(210, 300)
+            IslandMode.SCREENSHOT -> (expW * 0.76f).toInt().coerceIn(216, 304)
+            IslandMode.NOTIFICATION -> (expW * 0.90f).toInt().coerceIn(248, 356)
+            IslandMode.EXPANDED_MEDIA -> expW
+            IslandMode.EXPANDED_NOTIFICATION -> expW
+            IslandMode.EXPANDED_HUB -> expW
         }
         return if (hasSatellite(targetMode, sat)) base + 44 else base
     }
 
-    fun desiredHeightDp(targetMode: IslandMode = state.mode): Int {
+    fun desiredHeightDp(
+        targetMode: IslandMode = state.mode,
+        hideIdleVisual: Boolean = state.hideIdleVisual,
+        calibrationGuide: Boolean = state.calibrationGuide
+    ): Int {
         val idleH = Prefs.dynamicIslandIdleHeight(context)
         val topSafe = cameraTopSafeDp()
-        val compactH = idleH.coerceAtLeast(36)
+        val compactH = Prefs.dynamicIslandCompactHeight(context).coerceAtLeast(idleH)
+        val expH = Prefs.dynamicIslandExpandedHeight(context)
         return when (targetMode) {
             IslandMode.HIDDEN -> 1
-            IslandMode.IDLE_PILL -> idleH
+            IslandMode.IDLE_PILL -> if (hideIdleVisual && !calibrationGuide) {
+                idleH.coerceAtLeast(32)
+            } else {
+                idleH
+            }
             IslandMode.COMPACT_MEDIA,
             IslandMode.RINGER_MODE,
             IslandMode.CHARGING,
@@ -245,14 +286,17 @@ class DynamicIslandView(context: Context) : View(context) {
             IslandMode.CLIPBOARD,
             IslandMode.SCREENSHOT -> topSafe + 40
             IslandMode.NOTIFICATION -> topSafe + 48
-            IslandMode.EXPANDED_NOTIFICATION -> topSafe + 114
-            IslandMode.EXPANDED_HUB -> topSafe + 120
-            IslandMode.EXPANDED_MEDIA -> topSafe + 124
+            IslandMode.EXPANDED_NOTIFICATION -> topSafe + (expH - 18).coerceAtLeast(108)
+            IslandMode.EXPANDED_HUB -> topSafe + (expH - 12).coerceAtLeast(116)
+            IslandMode.EXPANDED_MEDIA -> topSafe + expH
         }
     }
 
     fun render(newState: IslandDisplayState) {
         val modeChanged = state.mode != newState.mode || state.satellite != newState.satellite
+        if (modeChanged) {
+            isSeeking = false
+        }
         state = newState
 
         if (modeChanged) {
@@ -284,6 +328,7 @@ class DynamicIslandView(context: Context) : View(context) {
 
     fun hideImmediate() {
         state = IslandDisplayState(mode = IslandMode.HIDDEN)
+        isSeeking = false
         touchHandler.removeCallbacks(longPressRunnable)
         stopLoopAnimation()
         morphAnimator?.cancel()
@@ -320,6 +365,12 @@ class DynamicIslandView(context: Context) : View(context) {
         super.onDetachedFromWindow()
     }
 
+    private fun computeSeekFraction(x: Float): Float {
+        val span = seekBarRect.width()
+        if (span <= 1f) return state.progressFraction.coerceIn(0f, 1f)
+        return ((x - seekBarRect.left) / span).coerceIn(0f, 1f)
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (state.mode == IslandMode.HIDDEN) return false
         when (event.actionMasked) {
@@ -329,12 +380,30 @@ class DynamicIslandView(context: Context) : View(context) {
                 gestureHandled = false
                 swipedUp = false
                 swipedDown = false
-                animate().scaleX(0.975f).scaleY(0.975f).setDuration(75).start()
+                swipedLeft = false
+                swipedRight = false
+                isSeeking = state.mode == IslandMode.EXPANDED_MEDIA &&
+                    state.mediaDurationMs > 0L &&
+                    seekBarHitRect.contains(event.x, event.y)
+                if (isSeeking) {
+                    seekPreviewFraction = computeSeekFraction(event.x)
+                    touchHandler.removeCallbacks(longPressRunnable)
+                    invalidate()
+                    return true
+                }
+                if (!(state.mode == IslandMode.IDLE_PILL && state.hideIdleVisual && !state.calibrationGuide)) {
+                    animate().scaleX(0.975f).scaleY(0.975f).setDuration(75).start()
+                }
                 touchHandler.removeCallbacks(longPressRunnable)
                 touchHandler.postDelayed(longPressRunnable, 380L)
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
+                if (isSeeking) {
+                    seekPreviewFraction = computeSeekFraction(event.x)
+                    invalidate()
+                    return true
+                }
                 val dx = event.x - downX
                 val dy = event.y - downY
                 if (abs(dx) > dp(12f) || abs(dy) > dp(12f)) {
@@ -342,11 +411,23 @@ class DynamicIslandView(context: Context) : View(context) {
                 }
                 if (dy < -dp(18f) && abs(dy) > abs(dx)) swipedUp = true
                 if (dy > dp(18f) && abs(dy) > abs(dx)) swipedDown = true
+                if (state.mode == IslandMode.COMPACT_MEDIA && abs(dx) > dp(24f) && abs(dx) > abs(dy) * 1.25f) {
+                    if (dx < 0f) swipedLeft = true else swipedRight = true
+                }
                 return true
             }
             MotionEvent.ACTION_UP -> {
                 touchHandler.removeCallbacks(longPressRunnable)
                 animate().scaleX(1f).scaleY(1f).setDuration(105).start()
+                if (isSeeking) {
+                    val target = computeSeekFraction(event.x)
+                    isSeeking = false
+                    seekPreviewFraction = target
+                    state = state.copy(progressFraction = target)
+                    invalidate()
+                    listener?.onMediaSeekTo(target)
+                    return true
+                }
                 if (gestureHandled) return true
                 if (swipedUp) {
                     listener?.onSwipeUpDismiss()
@@ -356,12 +437,18 @@ class DynamicIslandView(context: Context) : View(context) {
                     listener?.onSwipeDown(state.mode)
                     return true
                 }
+                if (swipedLeft || swipedRight) {
+                    listener?.onMediaSwipeSkip(next = swipedLeft)
+                    return true
+                }
                 handleTap(event.x, event.y)
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
                 touchHandler.removeCallbacks(longPressRunnable)
+                isSeeking = false
                 animate().scaleX(1f).scaleY(1f).setDuration(105).start()
+                invalidate()
                 return true
             }
         }
@@ -375,9 +462,12 @@ class DynamicIslandView(context: Context) : View(context) {
         }
         when (state.mode) {
             IslandMode.EXPANDED_MEDIA -> when {
+                mediaFloatRect.contains(x, y) -> listener?.onMediaOpenFloating()
+                rewindRect.contains(x, y) -> listener?.onMediaSeekBy(-10_000L)
                 prevRect.contains(x, y) -> listener?.onMediaPrev()
                 playRect.contains(x, y) -> listener?.onMediaPlayPause()
                 nextRect.contains(x, y) -> listener?.onMediaNext()
+                forwardRect.contains(x, y) -> listener?.onMediaSeekBy(10_000L)
                 mediaHeaderRect.contains(x, y) -> listener?.onMediaOpenApp()
                 else -> listener?.onTapMain(state.mode)
             }
@@ -417,10 +507,18 @@ class DynamicIslandView(context: Context) : View(context) {
         super.onDraw(canvas)
         if (state.mode == IslandMode.HIDDEN || width <= 2 || height <= 2) return
 
+        // En reposo oculto detrás de la cámara: totalmente invisible pero mantiene zona táctil sobre el lente
+        if (state.mode == IslandMode.IDLE_PILL && state.hideIdleVisual && !state.calibrationGuide) {
+            pillRect.set(0f, 0f, width.toFloat(), height.toFloat())
+            satelliteRect.setEmpty()
+            return
+        }
+
         val spec = Prefs.panelStyle(context).visualSpec(light = false)
         val primaryArgb = spec.primary.toArgb()
         val secondaryArgb = spec.secondary.toArgb()
         val accentArgb = state.accentColor ?: primaryArgb
+        val secondaryAccentArgb = state.secondaryAccentColor ?: secondaryArgb
 
         val showSat = hasSatellite()
         val satDiameter = dp(36f).coerceAtMost(height.toFloat())
@@ -447,8 +545,12 @@ class DynamicIslandView(context: Context) : View(context) {
             else -> drawH / 2f
         }
 
-        // Cápsula principal: Negro OLED puro (#000000) sin borde
-        bgPaint.color = Color.BLACK
+        // Cápsula principal: Negro OLED puro (#000000) o semitransparente durante guía de calibración
+        bgPaint.color = if (state.calibrationGuide && state.mode == IslandMode.IDLE_PILL && state.hideIdleVisual) {
+            Color.argb(170, 0, 0, 0)
+        } else {
+            Color.BLACK
+        }
         canvas.drawRoundRect(pillRect, cornerRadius, cornerRadius, bgPaint)
 
         // Burbuja satélite independiente (modo burbuja dividida estilo iPhone)
@@ -456,8 +558,9 @@ class DynamicIslandView(context: Context) : View(context) {
             val satLeft = pillRect.right + satGap
             val satTop = pillRect.centerY() - satDiameter / 2f
             satelliteRect.set(satLeft, satTop, satLeft + satDiameter, satTop + satDiameter)
+            bgPaint.color = Color.BLACK
             canvas.drawOval(satelliteRect, bgPaint)
-            drawSatelliteContent(canvas, primaryArgb, secondaryArgb)
+            drawSatelliteContent(canvas, accentArgb, secondaryAccentArgb)
         } else {
             satelliteRect.setEmpty()
         }
@@ -467,7 +570,7 @@ class DynamicIslandView(context: Context) : View(context) {
 
         when (state.mode) {
             IslandMode.IDLE_PILL -> Unit
-            IslandMode.COMPACT_MEDIA -> drawCompactMedia(canvas, primaryArgb, secondaryArgb, camHalfPx)
+            IslandMode.COMPACT_MEDIA -> drawCompactMedia(canvas, accentArgb, secondaryAccentArgb, camHalfPx)
             IslandMode.RINGER_MODE -> drawRingerMode(canvas, primaryArgb, camHalfPx)
             IslandMode.CHARGING -> drawCharging(canvas, camHalfPx)
             IslandMode.CALL -> drawCall(canvas, camHalfPx)
@@ -477,18 +580,20 @@ class DynamicIslandView(context: Context) : View(context) {
             IslandMode.CLIPBOARD -> drawActionAlert(canvas, primaryArgb, topSafePx, isScreenshot = false)
             IslandMode.SCREENSHOT -> drawActionAlert(canvas, secondaryArgb, topSafePx, isScreenshot = true)
             IslandMode.NOTIFICATION -> drawCompactNotification(canvas, accentArgb, topSafePx)
-            IslandMode.EXPANDED_MEDIA -> drawExpandedMedia(canvas, primaryArgb, secondaryArgb, topSafePx)
+            IslandMode.EXPANDED_MEDIA -> drawExpandedMedia(canvas, accentArgb, secondaryAccentArgb, topSafePx)
             IslandMode.EXPANDED_NOTIFICATION -> drawExpandedNotification(canvas, primaryArgb, accentArgb, topSafePx)
             IslandMode.EXPANDED_HUB -> drawExpandedHub(canvas, primaryArgb, secondaryArgb, topSafePx)
             IslandMode.HIDDEN -> Unit
         }
 
-        // Aro guía azul translúcido durante calibración en Ajustes para alinear sobre la cámara física
+        // Aro guía azul translúcido durante calibración en Ajustes para alinear exactamente sobre la cámara física
         if (state.calibrationGuide) {
             guidePaint.strokeWidth = dp(1.4f)
-            val camR = (camHalfPx * 0.72f).coerceIn(dp(8f), dp(18f))
+            val camR = (camHalfPx * 0.68f).coerceIn(dp(6f), dp(18f))
             val camCy = dp(Prefs.dynamicIslandIdleHeight(context).toFloat()) / 2f
             canvas.drawCircle(pillRect.centerX(), camCy, camR, guidePaint)
+            canvas.drawLine(pillRect.centerX() - dp(4f), camCy, pillRect.centerX() + dp(4f), camCy, guidePaint)
+            canvas.drawLine(pillRect.centerX(), camCy - dp(4f), pillRect.centerX(), camCy + dp(4f), guidePaint)
             canvas.drawRoundRect(
                 pillRect.left + dp(1f),
                 pillRect.top + dp(1f),
@@ -752,29 +857,53 @@ class DynamicIslandView(context: Context) : View(context) {
     }
 
     private fun drawExpandedMedia(canvas: Canvas, primaryArgb: Int, secondaryArgb: Int, topSafePx: Float) {
-        val padH = dp(18f)
-        val artSize = dp(44f)
+        val padH = dp(16f)
+        val availH = (pillRect.bottom - topSafePx).coerceAtLeast(dp(106f))
+        val artSize = dp(46f).coerceAtMost(availH * 0.42f)
         val artLeft = pillRect.left + padH
         val artTop = topSafePx + dp(6f)
-        mediaHeaderRect.set(pillRect.left, pillRect.top, pillRect.right, artTop + artSize + dp(4f))
+        val artCy = artTop + artSize / 2f
+
+        // Halo sutil teñido con el color dominante de la carátula
+        chipPaint.color = withAlpha(primaryArgb, 42)
+        canvas.drawRoundRect(
+            artLeft - dp(3f),
+            artTop - dp(3f),
+            artLeft + artSize + dp(3f),
+            artTop + artSize + dp(3f),
+            dp(14f),
+            dp(14f),
+            chipPaint
+        )
 
         val bmp = state.icon
         if (bmp != null) {
             drawRoundedBitmap(canvas, bmp, RectF(artLeft, artTop, artLeft + artSize, artTop + artSize), dp(12f))
         } else {
-            chipPaint.color = withAlpha(primaryArgb, 45)
+            chipPaint.color = withAlpha(primaryArgb, 54)
             canvas.drawRoundRect(artLeft, artTop, artLeft + artSize, artTop + artSize, dp(12f), dp(12f), chipPaint)
-            drawMusicNoteGlyph(canvas, artLeft + artSize / 2f, artTop + artSize / 2f, dp(11f), primaryArgb)
+            drawMusicNoteGlyph(canvas, artLeft + artSize / 2f, artCy, dp(11f), primaryArgb)
         }
 
-        val eqStart = pillRect.right - padH - dp(15f)
-        val artCy = artTop + artSize / 2f
+        // Botón compacto "Flotante" en la esquina derecha + ecualizador dinámico
+        val floatBtnH = dp(26f)
+        val floatBtnW = dp(30f)
+        val floatRight = pillRect.right - padH
+        val floatLeft = floatRight - floatBtnW
+        mediaFloatRect.set(floatLeft, artCy - floatBtnH / 2f, floatRight, artCy + floatBtnH / 2f)
+        chipPaint.color = withAlpha(primaryArgb, 56)
+        canvas.drawRoundRect(mediaFloatRect, floatBtnH / 2f, floatBtnH / 2f, chipPaint)
+        drawFloatingWindowGlyph(canvas, mediaFloatRect.centerX(), mediaFloatRect.centerY(), dp(6.2f), Color.WHITE)
+
+        val eqStart = floatLeft - dp(21f)
         drawEqualizer(canvas, eqStart, artCy, primaryArgb, secondaryArgb, playing = state.playing)
 
-        val textLeft = artLeft + artSize + dp(12f)
-        val textMaxW = (eqStart - dp(10f) - textLeft).coerceAtLeast(dp(40f))
+        mediaHeaderRect.set(pillRect.left, pillRect.top, floatLeft - dp(4f), artTop + artSize + dp(4f))
 
-        titlePaint.textSize = dp(13.8f)
+        val textLeft = artLeft + artSize + dp(11f)
+        val textMaxW = (eqStart - dp(8f) - textLeft).coerceAtLeast(dp(40f))
+
+        titlePaint.textSize = dp(13.6f)
         titlePaint.color = Color.WHITE
         val title = TextUtils.ellipsize(
             state.title.ifBlank { "Reproducción multimedia" },
@@ -784,8 +913,8 @@ class DynamicIslandView(context: Context) : View(context) {
         ).toString()
         canvas.drawText(title, textLeft, artCy - dp(3f), titlePaint)
 
-        subtitlePaint.textSize = dp(11.5f)
-        subtitlePaint.color = Color.argb(175, 214, 220, 232)
+        subtitlePaint.textSize = dp(11.3f)
+        subtitlePaint.color = Color.argb(185, 214, 222, 236)
         val artist = TextUtils.ellipsize(
             state.subtitle.ifBlank { "Toca aquí para abrir la app" },
             subtitlePaint,
@@ -794,25 +923,40 @@ class DynamicIslandView(context: Context) : View(context) {
         ).toString()
         canvas.drawText(artist, textLeft, artCy + dp(12.5f), subtitlePaint)
 
-        // Barra de progreso real de la canción
-        val barY = artTop + artSize + dp(15f)
-        subtitlePaint.textSize = dp(10f)
-        subtitlePaint.color = Color.argb(150, 210, 216, 228)
-        val leftTime = state.progressLeftText.ifBlank { "0:00" }
+        // Barra de progreso TÁCTIL (arrastrar o tocar para adelantar/retroceder)
+        val controlsH = dp(34f)
+        val controlsCy = pillRect.bottom - dp(12f) - controlsH / 2f
+        val barY = ((artTop + artSize) + (controlsCy - controlsH / 2f)) / 2f
+
+        val activeFraction = (if (isSeeking) seekPreviewFraction else state.progressFraction).coerceIn(0f, 1f)
+        subtitlePaint.textSize = dp(10.2f)
+        subtitlePaint.color = if (isSeeking) Color.WHITE else Color.argb(165, 212, 220, 234)
+        val leftTime = if (isSeeking && state.mediaDurationMs > 0L) {
+            formatMmSsLocal((state.mediaDurationMs * activeFraction).toLong())
+        } else {
+            state.progressLeftText.ifBlank { "0:00" }
+        }
         val rightTime = state.progressRightText
-        val timeW = dp(32f)
+        val timeW = dp(33f)
         val barLeft = if (rightTime.isNotBlank()) pillRect.left + padH + timeW else pillRect.left + padH
         val barRight = if (rightTime.isNotBlank()) pillRect.right - padH - timeW else pillRect.right - padH
         if (rightTime.isNotBlank()) {
             val tb = barY - (subtitlePaint.descent() + subtitlePaint.ascent()) / 2f
             canvas.drawText(leftTime, pillRect.left + padH, tb, subtitlePaint)
+            subtitlePaint.color = Color.argb(155, 210, 218, 232)
             val rw = subtitlePaint.measureText(rightTime)
             canvas.drawText(rightTime, pillRect.right - padH - rw, tb, subtitlePaint)
         }
-        val barH = dp(3.5f)
-        chipPaint.color = Color.argb(46, 255, 255, 255)
-        canvas.drawRoundRect(barLeft, barY - barH / 2f, barRight, barY + barH / 2f, barH / 2f, barH / 2f, chipPaint)
-        val progW = ((barRight - barLeft) * state.progressFraction.coerceIn(0f, 1f)).coerceAtLeast(dp(4f))
+
+        val barH = if (isSeeking) dp(6f) else dp(4f)
+        seekBarRect.set(barLeft, barY - barH / 2f, barRight, barY + barH / 2f)
+        seekBarHitRect.set(barLeft - dp(10f), barY - dp(14f), barRight + dp(10f), barY + dp(14f))
+
+        chipPaint.color = Color.argb(48, 255, 255, 255)
+        canvas.drawRoundRect(seekBarRect, barH / 2f, barH / 2f, chipPaint)
+
+        val progSpan = (barRight - barLeft).coerceAtLeast(1f)
+        val progW = (progSpan * activeFraction).coerceAtLeast(dp(4f))
         chipPaint.shader = LinearGradient(
             barLeft, barY, barLeft + progW, barY,
             intArrayOf(primaryArgb, secondaryArgb),
@@ -822,33 +966,78 @@ class DynamicIslandView(context: Context) : View(context) {
         canvas.drawRoundRect(barLeft, barY - barH / 2f, barLeft + progW, barY + barH / 2f, barH / 2f, barH / 2f, chipPaint)
         chipPaint.shader = null
 
-        // Botones Anterior / Play-Pausa / Siguiente
-        val controlsCy = pillRect.bottom - dp(24f)
-        val btnH = dp(33f)
-        val btnW = dp(66f)
-        val gap = dp(14f)
-        val totalW = btnW * 3f + gap * 2f
-        val startX = pillRect.centerX() - totalW / 2f
-
-        prevRect.set(startX, controlsCy - btnH / 2f, startX + btnW, controlsCy + btnH / 2f)
-        playRect.set(prevRect.right + gap, controlsCy - btnH / 2f, prevRect.right + gap + btnW, controlsCy + btnH / 2f)
-        nextRect.set(playRect.right + gap, controlsCy - btnH / 2f, playRect.right + gap + btnW, controlsCy + btnH / 2f)
-
-        chipPaint.color = Color.argb(26, 255, 255, 255)
-        canvas.drawRoundRect(prevRect, btnH / 2f, btnH / 2f, chipPaint)
-        drawSkipGlyph(canvas, prevRect.centerX(), prevRect.centerY(), dp(7.5f), next = false)
-
-        chipPaint.color = Color.WHITE
-        canvas.drawRoundRect(playRect, btnH / 2f, btnH / 2f, chipPaint)
-        if (state.playing) {
-            drawPauseGlyph(canvas, playRect.centerX(), playRect.centerY(), dp(7.5f), Color.BLACK)
-        } else {
-            drawPlayGlyph(canvas, playRect.centerX(), playRect.centerY(), dp(7.5f), Color.BLACK)
+        // Punto deslizador (thumb) visible y ampliado al arrastrar
+        if (state.mediaDurationMs > 0L) {
+            val thumbX = (barLeft + progSpan * activeFraction).coerceIn(barLeft, barRight)
+            val thumbR = if (isSeeking) dp(6.4f) else dp(4.2f)
+            if (isSeeking) {
+                chipPaint.color = withAlpha(primaryArgb, 95)
+                canvas.drawCircle(thumbX, barY, thumbR + dp(3.5f), chipPaint)
+            }
+            chipPaint.color = Color.WHITE
+            canvas.drawCircle(thumbX, barY, thumbR, chipPaint)
         }
 
-        chipPaint.color = Color.argb(26, 255, 255, 255)
-        canvas.drawRoundRect(nextRect, btnH / 2f, btnH / 2f, chipPaint)
-        drawSkipGlyph(canvas, nextRect.centerX(), nextRect.centerY(), dp(7.5f), next = true)
+        // Fila de 5 controles: -10s | Anterior | Play/Pausa | Siguiente | +10s
+        val availBtnW = (pillRect.width() - padH * 2f).coerceAtLeast(dp(180f))
+        val gap = dp(7f)
+        val playW = (availBtnW * 0.25f).coerceIn(dp(50f), dp(72f))
+        val sideW = ((availBtnW - playW - gap * 4f) / 4f).coerceAtLeast(dp(32f))
+        val totalW = sideW * 4f + playW + gap * 4f
+        val startX = pillRect.centerX() - totalW / 2f
+
+        rewindRect.set(startX, controlsCy - controlsH / 2f, startX + sideW, controlsCy + controlsH / 2f)
+        prevRect.set(rewindRect.right + gap, controlsCy - controlsH / 2f, rewindRect.right + gap + sideW, controlsCy + controlsH / 2f)
+        playRect.set(prevRect.right + gap, controlsCy - controlsH / 2f, prevRect.right + gap + playW, controlsCy + controlsH / 2f)
+        nextRect.set(playRect.right + gap, controlsCy - controlsH / 2f, playRect.right + gap + sideW, controlsCy + controlsH / 2f)
+        forwardRect.set(nextRect.right + gap, controlsCy - controlsH / 2f, nextRect.right + gap + sideW, controlsCy + controlsH / 2f)
+
+        val sideBg = Color.argb(24, 255, 255, 255)
+        chipPaint.color = sideBg
+        canvas.drawRoundRect(rewindRect, controlsH / 2f, controlsH / 2f, chipPaint)
+        badgePaint.textSize = dp(10.5f)
+        badgePaint.color = Color.argb(225, 236, 240, 248)
+        val seekBaseline = controlsCy - (badgePaint.descent() + badgePaint.ascent()) / 2f
+        canvas.drawText("-10", rewindRect.centerX(), seekBaseline, badgePaint)
+
+        chipPaint.color = sideBg
+        canvas.drawRoundRect(prevRect, controlsH / 2f, controlsH / 2f, chipPaint)
+        drawSkipGlyph(canvas, prevRect.centerX(), prevRect.centerY(), dp(7.2f), next = false)
+
+        // Botón central Play/Pausa con brillo del color de la carátula
+        chipPaint.color = withAlpha(primaryArgb, 75)
+        canvas.drawRoundRect(
+            playRect.left - dp(1.5f),
+            playRect.top - dp(1.5f),
+            playRect.right + dp(1.5f),
+            playRect.bottom + dp(1.5f),
+            (controlsH + dp(3f)) / 2f,
+            (controlsH + dp(3f)) / 2f,
+            chipPaint
+        )
+        chipPaint.color = Color.WHITE
+        canvas.drawRoundRect(playRect, controlsH / 2f, controlsH / 2f, chipPaint)
+        if (state.playing) {
+            drawPauseGlyph(canvas, playRect.centerX(), playRect.centerY(), dp(7.6f), Color.BLACK)
+        } else {
+            drawPlayGlyph(canvas, playRect.centerX(), playRect.centerY(), dp(7.6f), Color.BLACK)
+        }
+
+        chipPaint.color = sideBg
+        canvas.drawRoundRect(nextRect, controlsH / 2f, controlsH / 2f, chipPaint)
+        drawSkipGlyph(canvas, nextRect.centerX(), nextRect.centerY(), dp(7.2f), next = true)
+
+        chipPaint.color = sideBg
+        canvas.drawRoundRect(forwardRect, controlsH / 2f, controlsH / 2f, chipPaint)
+        badgePaint.color = Color.argb(225, 236, 240, 248)
+        canvas.drawText("+10", forwardRect.centerX(), seekBaseline, badgePaint)
+    }
+
+    private fun formatMmSsLocal(ms: Long): String {
+        val totalSec = (ms / 1000L).coerceAtLeast(0L)
+        val mins = totalSec / 60L
+        val secs = totalSec % 60L
+        return String.format(java.util.Locale.US, "%d:%02d", mins, secs)
     }
 
     private fun drawExpandedNotification(canvas: Canvas, primaryArgb: Int, accentArgb: Int, topSafePx: Float) {
