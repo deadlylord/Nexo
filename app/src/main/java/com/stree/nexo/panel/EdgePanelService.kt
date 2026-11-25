@@ -116,6 +116,11 @@ class EdgePanelService : Service() {
     private var audioCallbackRegistered = false
     private var audioCallbackPrimed = false
     private var lastKnownRingerMode = -1
+    private var lastPluggedState = -1
+    private var lastChargingAlertMs = 0L
+    private var wasMediaActivelyPlaying = false
+    private var lastMediaPausedKey: String? = null
+    private var activeNotifKey: String? = null
     private var screenWasOff = false
     private var lastUnlockOpenMs = 0L
 
@@ -146,6 +151,20 @@ class EdgePanelService : Service() {
         gestureHandler.postDelayed(autoOpenUnlockRunnable, 280L)
     }
 
+    private fun showChargingIslandAlert(batteryPct: Int) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastChargingAlertMs < 2_500L) return
+        lastChargingAlertMs = now
+        showIslandAlert(
+            IslandDisplayState(
+                mode = IslandMode.CHARGING,
+                title = "Cargando",
+                batteryPercent = batteryPct
+            ),
+            durationMs = 3_600L
+        )
+    }
+
     private val systemReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -166,17 +185,22 @@ class EdgePanelService : Service() {
                     }
                 }
                 Intent.ACTION_POWER_CONNECTED -> {
-                    val pct = readBatteryPercent()
-                    showIslandAlert(
-                        IslandDisplayState(
-                            mode = IslandMode.CHARGING,
-                            title = "Cargando",
-                            batteryPercent = pct
-                        ),
-                        durationMs = 3_600L
-                    )
+                    lastPluggedState = 1
+                    showChargingIslandAlert(readBatteryPercent())
                 }
-                AudioManager.RINGER_MODE_CHANGED_ACTION -> {
+                Intent.ACTION_BATTERY_CHANGED -> {
+                    val plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
+                    val prev = lastPluggedState
+                    lastPluggedState = plugged
+                    if (prev == 0 && plugged > 0) {
+                        val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                        val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100).coerceAtLeast(1)
+                        val pct = if (level >= 0) (level * 100) / scale else readBatteryPercent()
+                        showChargingIslandAlert(pct)
+                    }
+                }
+                AudioManager.RINGER_MODE_CHANGED_ACTION,
+                "android.media.INTERNAL_RINGER_MODE_CHANGED_ACTION" -> {
                     val mode = intent.getIntExtra(
                         AudioManager.EXTRA_RINGER_MODE,
                         getSystemService(AudioManager::class.java)?.ringerMode ?: AudioManager.RINGER_MODE_NORMAL
@@ -301,18 +325,22 @@ class EdgePanelService : Service() {
     private val islandAlertTimeoutRunnable = Runnable {
         islandTemporaryAlert = false
         islandNotificationExpanded = false
+        activeNotifKey = null
         refreshIslandIdleState()
     }
 
     private val islandExpandTimeoutRunnable = Runnable {
+        islandTemporaryAlert = false
         islandMediaExpanded = false
         islandHubExpanded = false
         islandNotificationExpanded = false
+        activeNotifKey = null
         refreshIslandIdleState()
     }
 
     private val mediaPauseHideRunnable = Runnable {
         if (currentPlayback?.playing != true) {
+            wasMediaActivelyPlaying = false
             mediaHiddenWhilePaused = true
             islandMediaExpanded = false
             refreshIslandIdleState()
@@ -496,15 +524,24 @@ class EdgePanelService : Service() {
     private fun registerSystemIslandObservers() {
         if (!systemReceiverRegistered) {
             runCatching {
+                lastKnownRingerMode = getSystemService(AudioManager::class.java)?.ringerMode
+                    ?: AudioManager.RINGER_MODE_NORMAL
+                val stickyBattery = runCatching {
+                    registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                }.getOrNull()
+                lastPluggedState = stickyBattery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+
                 val filter = IntentFilter().apply {
                     addAction(Intent.ACTION_POWER_CONNECTED)
+                    addAction(Intent.ACTION_BATTERY_CHANGED)
                     addAction(AudioManager.RINGER_MODE_CHANGED_ACTION)
+                    addAction("android.media.INTERNAL_RINGER_MODE_CHANGED_ACTION")
                     addAction(Intent.ACTION_USER_PRESENT)
                     addAction(Intent.ACTION_SCREEN_ON)
                     addAction(Intent.ACTION_SCREEN_OFF)
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    registerReceiver(systemReceiver, filter, RECEIVER_NOT_EXPORTED)
+                    registerReceiver(systemReceiver, filter, RECEIVER_EXPORTED)
                 } else {
                     registerReceiver(systemReceiver, filter)
                 }
@@ -556,23 +593,40 @@ class EdgePanelService : Service() {
                     } else null
                 }
 
-                gestureHandler.removeCallbacks(mediaPauseHideRunnable)
                 when {
                     playing == null -> {
+                        gestureHandler.removeCallbacks(mediaPauseHideRunnable)
+                        wasMediaActivelyPlaying = false
                         mediaHiddenWhilePaused = false
                         islandMediaExpanded = false
+                        lastMediaPausedKey = null
                     }
                     playing.playing -> {
+                        gestureHandler.removeCallbacks(mediaPauseHideRunnable)
+                        wasMediaActivelyPlaying = true
                         mediaHiddenWhilePaused = false
+                        lastMediaPausedKey = null
                     }
                     else -> {
-                        val keepPaused = Prefs.dynamicIslandMediaKeepPaused(this@EdgePanelService)
-                        val hideDelay = when {
-                            keepPaused -> 45_000L
-                            islandMediaExpanded -> 3_200L
-                            else -> 1_800L
+                        // Si la sesión ya estaba pausada (no venía sonando), ocultarla de inmediato
+                        if (!wasMediaActivelyPlaying) {
+                            gestureHandler.removeCallbacks(mediaPauseHideRunnable)
+                            mediaHiddenWhilePaused = true
+                            islandMediaExpanded = false
+                        } else {
+                            val pauseKey = "${playing.packageName}|${playing.title}"
+                            if (pauseKey != lastMediaPausedKey) {
+                                lastMediaPausedKey = pauseKey
+                                gestureHandler.removeCallbacks(mediaPauseHideRunnable)
+                                val keepPaused = Prefs.dynamicIslandMediaKeepPaused(this@EdgePanelService)
+                                val hideDelay = when {
+                                    keepPaused -> 15_000L
+                                    islandMediaExpanded -> 2_800L
+                                    else -> 1_600L
+                                }
+                                gestureHandler.postDelayed(mediaPauseHideRunnable, hideDelay)
+                            }
                         }
-                        gestureHandler.postDelayed(mediaPauseHideRunnable, hideDelay)
                     }
                 }
 
@@ -616,6 +670,7 @@ class EdgePanelService : Service() {
             visibility = View.GONE
             listener = object : IslandInteractionListener {
                 override fun onTapMain(mode: IslandMode) = handleIslandMainTap(mode)
+                override fun onDoubleTap(mode: IslandMode) = handleIslandDoubleTap()
                 override fun onLongPress(mode: IslandMode) = handleIslandLongPress(mode)
                 override fun onSwipeDown(mode: IslandMode) = handleIslandSwipeDown(mode)
                 override fun onSwipeUpDismiss() = handleIslandSwipeUp()
@@ -631,7 +686,7 @@ class EdgePanelService : Service() {
                     if (now.playing) {
                         now.controller.transportControls.pause()
                         gestureHandler.removeCallbacks(mediaPauseHideRunnable)
-                        val delay = if (Prefs.dynamicIslandMediaKeepPaused(this@EdgePanelService)) 45_000L else 2_500L
+                        val delay = if (Prefs.dynamicIslandMediaKeepPaused(this@EdgePanelService)) 15_000L else 2_400L
                         gestureHandler.postDelayed(mediaPauseHideRunnable, delay)
                         scheduleExpandAutoCollapse(8_000L)
                     } else {
@@ -762,10 +817,13 @@ class EdgePanelService : Service() {
     }
 
     private fun collapseIslandExpansion() {
+        gestureHandler.removeCallbacks(islandAlertTimeoutRunnable)
         gestureHandler.removeCallbacks(islandExpandTimeoutRunnable)
+        islandTemporaryAlert = false
         islandMediaExpanded = false
         islandHubExpanded = false
         islandNotificationExpanded = false
+        activeNotifKey = null
         refreshIslandIdleState()
     }
 
@@ -776,7 +834,26 @@ class EdgePanelService : Service() {
         islandMediaExpanded = false
         islandHubExpanded = false
         islandNotificationExpanded = false
+        activeNotifKey = null
         refreshIslandIdleState()
+    }
+
+    private fun handleIslandDoubleTap() {
+        Haptics.perform(this, strong = true)
+        collapseIslandAllTemp()
+        val wasVisible = islandView?.visibility == View.VISIBLE
+        if (wasVisible) {
+            islandView?.visibility = View.INVISIBLE
+        }
+        gestureHandler.postDelayed({
+            val ok = SplitScreenService.performTakeScreenshot()
+            if (wasVisible) {
+                islandView?.visibility = View.VISIBLE
+            }
+            if (!ok) {
+                promptAccessibilityNeeded()
+            }
+        }, 140L)
     }
 
     private fun handleIslandMainTap(mode: IslandMode) {
@@ -1175,7 +1252,7 @@ class EdgePanelService : Service() {
 
     private fun hasRecentNotification(): Boolean {
         val latest = ClipboardHistoryStore.latestNotification ?: return false
-        return (System.currentTimeMillis() - latest.timestamp) in 0L..120_000L
+        return (System.currentTimeMillis() - latest.timestamp) in 0L..35_000L
     }
 
     private fun buildMediaDisplayState(expanded: Boolean, satellite: IslandSatellite, satIcon: Bitmap?): IslandDisplayState {
@@ -1274,7 +1351,7 @@ class EdgePanelService : Service() {
         }
 
         val playing = currentPlayback?.takeIf {
-            Prefs.dynamicIslandMedia(this) && (!mediaHiddenWhilePaused || it.playing)
+            Prefs.dynamicIslandMedia(this) && (it.playing || (wasMediaActivelyPlaying && !mediaHiddenWhilePaused))
         }
         val call = currentCall
         val swActive = isStopwatchActive()
@@ -1589,6 +1666,7 @@ class EdgePanelService : Service() {
         }
         if (Prefs.dynamicIslandEnabled(this) && Prefs.dynamicIslandNotifications(this)) {
             val locked = isDeviceLocked()
+            activeNotifKey = pulse.key
             showIslandAlert(
                 IslandDisplayState(
                     mode = IslandMode.NOTIFICATION,
@@ -2438,6 +2516,16 @@ class EdgePanelService : Service() {
         fun notifyNotificationPulse(context: Context, pulse: NotificationPulse) {
             instance?.let { service ->
                 service.gestureHandler.post { service.triggerNotificationAlert(pulse) }
+            }
+        }
+
+        fun notifyNotificationRemoved(context: Context, key: String) {
+            instance?.let { service ->
+                service.gestureHandler.post {
+                    if (service.activeNotifKey != null && service.activeNotifKey == key) {
+                        service.collapseIslandAllTemp()
+                    }
+                }
             }
         }
 

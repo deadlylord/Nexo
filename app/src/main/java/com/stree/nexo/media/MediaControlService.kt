@@ -45,7 +45,6 @@ class MediaControlService : NotificationListenerService() {
             list.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
                 ?: list.firstOrNull { it.playbackState?.state == PlaybackState.STATE_BUFFERING }
                 ?: list.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PAUSED }
-                ?: list.firstOrNull()
 
         fun activeController(context: Context): MediaController? {
             playback.value?.controller?.let { return it }
@@ -95,6 +94,8 @@ class MediaControlService : NotificationListenerService() {
     private val manager by lazy { getSystemService(MediaSessionManager::class.java) }
     private val component by lazy { ComponentName(this, MediaControlService::class.java) }
     private var controllers = emptyList<MediaController>()
+    private var lastNotifSignature: String = ""
+    private var lastNotifTimestampMs: Long = 0L
     private val callback = object : MediaController.Callback() {
         override fun onPlaybackStateChanged(state: PlaybackState?) = publish()
         override fun onMetadataChanged(metadata: MediaMetadata?) = publish()
@@ -194,11 +195,25 @@ class MediaControlService : NotificationListenerService() {
             return
         }
 
-        // Ignorar servicios en curso, resúmenes de grupo o avisos del sistema silenciosos
+        // Ignorar servicios en curso, resúmenes de grupo, controles multimedia o avisos persistentes
         val isOngoing = (flags and android.app.Notification.FLAG_ONGOING_EVENT) != 0 ||
             (flags and android.app.Notification.FLAG_FOREGROUND_SERVICE) != 0 ||
+            (flags and android.app.Notification.FLAG_NO_CLEAR) != 0 ||
             (flags and android.app.Notification.FLAG_GROUP_SUMMARY) != 0
-        if (isOngoing || pkg == "android" || pkg == "com.android.systemui") return
+        val ignoredCategory = notif.category == android.app.Notification.CATEGORY_TRANSPORT ||
+            notif.category == android.app.Notification.CATEGORY_SERVICE ||
+            notif.category == android.app.Notification.CATEGORY_PROGRESS ||
+            notif.category == android.app.Notification.CATEGORY_STATUS ||
+            notif.category == android.app.Notification.CATEGORY_SYSTEM
+        if (isOngoing || ignoredCategory || pkg == "android" || pkg == "com.android.systemui") return
+
+        // Evitar re-disparar la misma notificación repetida sin cambios de texto
+        val notifKey = sbn.key.orEmpty()
+        val signature = "$notifKey|$rawTitle|$rawText"
+        val nowMs = System.currentTimeMillis()
+        if (signature == lastNotifSignature && (nowMs - lastNotifTimestampMs) < 15_000L) return
+        lastNotifSignature = signature
+        lastNotifTimestampMs = nowMs
 
         // Acciones directas ejecutables (ej. Marcar como leído, Archivar, Silenciar)
         val quickActions = notif.actions
@@ -217,7 +232,7 @@ class MediaControlService : NotificationListenerService() {
         val accent = notif.color.takeIf { it != 0 }
         val pulse = com.stree.nexo.data.ClipboardHistoryStore.recordNotification(
             context = applicationContext,
-            key = sbn.key.orEmpty(),
+            key = notifKey,
             packageName = pkg,
             title = rawTitle,
             textPreview = rawText,
@@ -235,6 +250,7 @@ class MediaControlService : NotificationListenerService() {
             com.stree.nexo.data.ClipboardHistoryStore.clearCall(key)
             com.stree.nexo.panel.EdgePanelService.notifyCallUpdate(applicationContext, null)
         }
+        com.stree.nexo.panel.EdgePanelService.notifyNotificationRemoved(applicationContext, key)
     }
 
     override fun onListenerDisconnected() {

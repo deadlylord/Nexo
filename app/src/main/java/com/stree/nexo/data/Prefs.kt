@@ -293,10 +293,10 @@ object Prefs {
         prefs(context).getBoolean("dynamic_island_media", true)
 
     fun dynamicIslandMediaKeepPaused(context: Context): Boolean =
-        prefs(context).getBoolean("dynamic_island_media_keep_paused", true)
+        prefs(context).getBoolean("dynamic_island_media_keep_paused_v2", false)
 
     fun setDynamicIslandMediaKeepPaused(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean("dynamic_island_media_keep_paused", enabled).apply()
+        prefs(context).edit().putBoolean("dynamic_island_media_keep_paused_v2", enabled).apply()
     }
 
     fun setDynamicIslandMedia(context: Context, enabled: Boolean) {

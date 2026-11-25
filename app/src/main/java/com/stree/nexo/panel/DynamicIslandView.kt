@@ -100,6 +100,7 @@ data class IslandDisplayState(
 
 interface IslandInteractionListener {
     fun onTapMain(mode: IslandMode)
+    fun onDoubleTap(mode: IslandMode)
     fun onLongPress(mode: IslandMode)
     fun onSwipeDown(mode: IslandMode)
     fun onSwipeUpDismiss()
@@ -148,14 +149,22 @@ class DynamicIslandView(context: Context) : View(context) {
     private var swipedRight = false
     private var isSeeking = false
     private var seekPreviewFraction = 0f
+    private var pendingSingleTap: Runnable? = null
+    private var isSecondTap = false
     val isUserSeeking: Boolean get() = isSeeking
 
     private val longPressRunnable = Runnable {
-        if (!gestureHandled && !swipedUp && !swipedDown && !swipedLeft && !swipedRight && !isSeeking) {
+        if (!gestureHandled && !swipedUp && !swipedDown && !swipedLeft && !swipedRight && !isSeeking && !isSecondTap) {
             gestureHandled = true
+            cancelPendingSingleTap()
             animate().scaleX(1f).scaleY(1f).setDuration(90).start()
             listener?.onLongPress(state.mode)
         }
+    }
+
+    private fun cancelPendingSingleTap() {
+        pendingSingleTap?.let { touchHandler.removeCallbacks(it) }
+        pendingSingleTap = null
     }
 
     // Hit-boxes interactivos
@@ -386,6 +395,12 @@ class DynamicIslandView(context: Context) : View(context) {
         return ((x - seekBarRect.left) / span).coerceIn(0f, 1f)
     }
 
+    private fun supportsDoubleTap(mode: IslandMode): Boolean =
+        mode != IslandMode.EXPANDED_MEDIA &&
+            mode != IslandMode.EXPANDED_HUB &&
+            mode != IslandMode.EXPANDED_NOTIFICATION &&
+            mode != IslandMode.HIDDEN
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (state.mode == IslandMode.HIDDEN) return false
         when (event.actionMasked) {
@@ -401,16 +416,25 @@ class DynamicIslandView(context: Context) : View(context) {
                     state.mediaDurationMs > 0L &&
                     seekBarHitRect.contains(event.x, event.y)
                 if (isSeeking) {
+                    cancelPendingSingleTap()
+                    isSecondTap = false
                     seekPreviewFraction = computeSeekFraction(event.x)
                     touchHandler.removeCallbacks(longPressRunnable)
                     invalidate()
                     return true
                 }
+                if (pendingSingleTap != null && supportsDoubleTap(state.mode)) {
+                    cancelPendingSingleTap()
+                    isSecondTap = true
+                    touchHandler.removeCallbacks(longPressRunnable)
+                } else {
+                    isSecondTap = false
+                    touchHandler.removeCallbacks(longPressRunnable)
+                    touchHandler.postDelayed(longPressRunnable, 380L)
+                }
                 if (!(state.mode == IslandMode.IDLE_PILL && state.hideIdleVisual && !state.calibrationGuide)) {
                     animate().scaleX(0.975f).scaleY(0.975f).setDuration(75).start()
                 }
-                touchHandler.removeCallbacks(longPressRunnable)
-                touchHandler.postDelayed(longPressRunnable, 380L)
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
@@ -423,6 +447,8 @@ class DynamicIslandView(context: Context) : View(context) {
                 val dy = event.y - downY
                 if (abs(dx) > dp(12f) || abs(dy) > dp(12f)) {
                     touchHandler.removeCallbacks(longPressRunnable)
+                    cancelPendingSingleTap()
+                    isSecondTap = false
                 }
                 if (dy < -dp(18f) && abs(dy) > abs(dx)) swipedUp = true
                 if (dy > dp(18f) && abs(dy) > abs(dx)) swipedDown = true
@@ -443,28 +469,54 @@ class DynamicIslandView(context: Context) : View(context) {
                     listener?.onMediaSeekTo(target)
                     return true
                 }
-                if (gestureHandled) return true
+                if (gestureHandled) {
+                    isSecondTap = false
+                    return true
+                }
                 if (swipedUp) {
+                    isSecondTap = false
                     listener?.onSwipeUpDismiss()
                     return true
                 }
                 if (swipedDown) {
+                    isSecondTap = false
                     listener?.onSwipeDown(state.mode)
                     return true
                 }
                 if (swipedLeft || swipedRight) {
+                    isSecondTap = false
                     listener?.onMediaSwipeSkip(next = swipedLeft)
                     return true
                 }
-                handleTap(event.x, event.y)
+                if (isSecondTap) {
+                    isSecondTap = false
+                    listener?.onDoubleTap(state.mode)
+                    return true
+                }
+                val tapX = event.x
+                val tapY = event.y
+                if (supportsDoubleTap(state.mode) && !(hasSatellite() && satelliteRect.contains(tapX, tapY))) {
+                    val action = Runnable {
+                        pendingSingleTap = null
+                        handleTap(tapX, tapY)
+                    }
+                    pendingSingleTap = action
+                    touchHandler.postDelayed(action, 240L)
+                } else {
+                    handleTap(tapX, tapY)
+                }
                 return true
             }
             MotionEvent.ACTION_OUTSIDE -> {
+                cancelPendingSingleTap()
+                isSecondTap = false
                 listener?.onOutsideTouch()
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
                 touchHandler.removeCallbacks(longPressRunnable)
+                cancelPendingSingleTap()
+                isSecondTap = false
                 isSeeking = false
                 animate().scaleX(1f).scaleY(1f).setDuration(105).start()
                 invalidate()
