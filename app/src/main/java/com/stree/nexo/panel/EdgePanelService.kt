@@ -64,6 +64,7 @@ import com.stree.nexo.floating.FloatingAppBubbleController
 import com.stree.nexo.floating.FloatingWindowRegistry
 import com.stree.nexo.media.LyricsTrack
 import com.stree.nexo.media.MediaControlService
+import com.stree.nexo.media.PlaylistMetadata
 import com.stree.nexo.media.SongLyrics
 import com.stree.nexo.media.fetchLyrics
 import com.stree.nexo.media.NowPlaying
@@ -111,6 +112,7 @@ class EdgePanelService : Service() {
     private var currentCall: CallPulse? = null
     private var playbackJob: Job? = null
     private var lyricsJob: Job? = null
+    private var playlistArtJob: Job? = null
     private var lyricsTrack: LyricsTrack? = null
     private var songLyrics: SongLyrics? = null
     private var lyricsStatus = ""
@@ -380,7 +382,11 @@ class EdgePanelService : Service() {
                 if (!view.isUserSeeking) {
                     refreshIslandIdleState()
                 }
-                val interval = if (mode == IslandMode.EXPANDED_MEDIA) 500L else 1_000L
+                val interval = when {
+                    mode == IslandMode.EXPANDED_MEDIA && lyricsTrack != null && currentPlayback?.playing == true -> 200L
+                    mode == IslandMode.EXPANDED_MEDIA -> 500L
+                    else -> 1_000L
+                }
                 gestureHandler.postDelayed(this, interval)
             } else if (needsSlowTick) {
                 refreshIslandIdleState()
@@ -769,6 +775,27 @@ class EdgePanelService : Service() {
                     Haptics.perform(this@EdgePanelService)
                     val controls = currentPlayback?.controller?.transportControls ?: return
                     if (next) controls.skipToNext() else controls.skipToPrevious()
+                }
+                override fun onPlaylistCardTap(card: IslandPlaylistCard) {
+                    Haptics.perform(this@EdgePanelService)
+                    val qId = card.queueId
+                    if (qId != null) {
+                        MediaControlService.skipToQueueItem(qId)
+                        scheduleExpandAutoCollapse(8_000L)
+                    } else if (!card.url.isNullOrBlank()) {
+                        collapseIslandExpansion()
+                        PlaylistMetadata.openPlaylist(this@EdgePanelService, card.url)
+                    }
+                }
+                override fun onPlaylistAddTap() {
+                    Haptics.perform(this@EdgePanelService)
+                    collapseIslandExpansion()
+                    startOverlayActivity(
+                        Intent(this@EdgePanelService, MainActivity::class.java).apply {
+                            putExtra("open_settings", true)
+                            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                        }
+                    )
                 }
                 override fun onNotificationOpenFloating() {
                     val pulse = recentIslandNotification() ?: return
@@ -1267,7 +1294,9 @@ class EdgePanelService : Service() {
                 calibrationGuide = finalState.calibrationGuide,
                 aboveStatusBar = islandUsingAccessibilityOverlay,
                 lyricsAvailable = finalState.lyricsAvailable,
-                lyricsOpen = finalState.lyricsOpen
+                lyricsOpen = finalState.lyricsOpen,
+                showPlaylistStrip = finalState.showPlaylistStrip,
+                hasPlaylists = finalState.playlists.isNotEmpty()
             )
         )
         val targetX = dp(Prefs.dynamicIslandHorizontalOffset(this))
@@ -1299,8 +1328,10 @@ class EdgePanelService : Service() {
 
         gestureHandler.removeCallbacks(islandLiveTickRunnable)
         when (finalState.mode) {
-            IslandMode.EXPANDED_MEDIA ->
-                gestureHandler.postDelayed(islandLiveTickRunnable, 500L)
+            IslandMode.EXPANDED_MEDIA -> {
+                val interval = if (finalState.lyricsOpen && finalState.playing) 200L else 500L
+                gestureHandler.postDelayed(islandLiveTickRunnable, interval)
+            }
             IslandMode.CALL, IslandMode.STOPWATCH ->
                 gestureHandler.postDelayed(islandLiveTickRunnable, 1_000L)
             IslandMode.EXPANDED_HUB ->
@@ -1397,6 +1428,63 @@ class EdgePanelService : Service() {
         val lookup = timed?.binarySearchBy(clampedPos) { it.positionMs } ?: -1
         val activeLine = if (lookup >= 0) lookup else -lookup - 2
 
+        val activeTimedStartMs = if (timed != null && activeLine in timed.indices) {
+            timed[activeLine].positionMs
+        } else 0L
+        val activeTimedEndMs = if (timed != null && activeLine in timed.indices) {
+            val nextStart = timed.getOrNull(activeLine + 1)?.positionMs
+            when {
+                nextStart != null && nextStart > activeTimedStartMs -> nextStart
+                duration > activeTimedStartMs -> minOf(duration, activeTimedStartMs + 5_000L)
+                else -> activeTimedStartMs + 4_000L
+            }
+        } else 0L
+        val lyricLineKey = when {
+            timed != null && activeLine in timed.indices -> "t_$activeLine"
+            plain != null -> "p_$lyricsPage"
+            lyricsOpen -> "s_$lyricsStatus"
+            else -> ""
+        }
+
+        val showPlaylists = expanded && calibrationMode == IslandCalibrationMode.OFF && Prefs.dynamicIslandShowPlaylists(this)
+        val playlistCards: List<IslandPlaylistCard> = if (showPlaylists) {
+            val pinned = Prefs.pinnedPlaylists(this)
+            if (pinned.isNotEmpty()) {
+                val missingArtPaths = pinned.mapNotNull { item ->
+                    item.artPath?.takeIf { PlaylistMetadata.getCachedPlaylistArt(it) == null }
+                }
+                if (missingArtPaths.isNotEmpty() && playlistArtJob?.isActive != true) {
+                    playlistArtJob = gestureScope.launch {
+                        PlaylistMetadata.preloadPlaylistArt(missingArtPaths)
+                        if (islandMediaExpanded) refreshIslandIdleState()
+                    }
+                }
+                pinned.map { item ->
+                    IslandPlaylistCard(
+                        id = item.id,
+                        title = item.title,
+                        art = PlaylistMetadata.getCachedPlaylistArt(item.artPath),
+                        url = item.url,
+                        queueId = null
+                    )
+                }
+            } else if (playing.queue.isNotEmpty()) {
+                playing.queue.map { q ->
+                    IslandPlaylistCard(
+                        id = "q_${q.queueId}",
+                        title = q.title,
+                        art = q.art,
+                        url = null,
+                        queueId = q.queueId
+                    )
+                }
+            } else {
+                emptyList()
+            }
+        } else {
+            emptyList()
+        }
+
         return IslandDisplayState(
             mode = if (expanded) IslandMode.EXPANDED_MEDIA else IslandMode.COMPACT_MEDIA,
             title = playing.title,
@@ -1423,6 +1511,14 @@ class EdgePanelService : Service() {
                 else -> ""
             },
             lyricsPaging = (plain?.size ?: 0) > 2,
+            lyricLineStartMs = activeTimedStartMs,
+            lyricLineEndMs = activeTimedEndMs,
+            lyricBasePositionMs = playing.positionMs,
+            lyricPositionUpdatedAtMs = playing.positionUpdateTimeMs,
+            lyricPlaybackSpeed = playing.playbackSpeed,
+            lyricLineKey = lyricLineKey,
+            playlists = playlistCards,
+            showPlaylistStrip = showPlaylists,
             satellite = if (expanded) IslandSatellite.NONE else satellite,
             satelliteIcon = if (expanded) null else satIcon
         )
@@ -2514,6 +2610,7 @@ class EdgePanelService : Service() {
 
     private fun openSpotlight() {
         Haptics.perform(this)
+        islandView?.triggerLaunchPulse()
         startOverlayActivity(
             Intent(this, SpotlightSearchActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)

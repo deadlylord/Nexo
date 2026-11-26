@@ -16,6 +16,7 @@ import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
@@ -23,6 +24,7 @@ import android.text.TextUtils
 import android.view.MotionEvent
 import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.animation.DecelerateInterpolator
 import android.view.animation.LinearInterpolator
 import android.view.animation.OvershootInterpolator
 import androidx.compose.ui.graphics.toArgb
@@ -76,6 +78,14 @@ enum class IslandHubAction {
     STOPWATCH_RESET
 }
 
+data class IslandPlaylistCard(
+    val id: String,
+    val title: String,
+    val art: Bitmap? = null,
+    val url: String? = null,
+    val queueId: Long? = null
+)
+
 data class IslandDisplayState(
     val mode: IslandMode = IslandMode.HIDDEN,
     val title: String = "",
@@ -95,6 +105,14 @@ data class IslandDisplayState(
     val lyricsPrimary: String = "",
     val lyricsSecondary: String = "",
     val lyricsPaging: Boolean = false,
+    val lyricLineStartMs: Long = 0L,
+    val lyricLineEndMs: Long = 0L,
+    val lyricBasePositionMs: Long = 0L,
+    val lyricPositionUpdatedAtMs: Long = 0L,
+    val lyricPlaybackSpeed: Float = 1f,
+    val lyricLineKey: String = "",
+    val playlists: List<IslandPlaylistCard> = emptyList(),
+    val showPlaylistStrip: Boolean = false,
     val batteryPercent: Int = 0,
     val ringerMode: Int = AudioManager.RINGER_MODE_NORMAL,
     val doNotDisturbOn: Boolean = false,
@@ -126,6 +144,8 @@ interface IslandInteractionListener {
     fun onMediaLyricsPage(delta: Int)
     fun onMediaOpenFloating()
     fun onMediaSwipeSkip(next: Boolean)
+    fun onPlaylistCardTap(card: IslandPlaylistCard)
+    fun onPlaylistAddTap()
     fun onNotificationOpenFloating()
     fun onNotificationQuickAction(index: Int)
     fun onHubAction(action: IslandHubAction)
@@ -151,6 +171,28 @@ class DynamicIslandView(context: Context) : View(context) {
 
     private var morphAnimator: ValueAnimator? = null
     private var loopAnimator: ValueAnimator? = null
+    private var lyricTransitionAnimator: ValueAnimator? = null
+    private var launchPulseAnimator: ValueAnimator? = null
+    private var launchPulseScaleX = 1f
+    private var launchPulseScaleY = 1f
+
+    // Estado de transición animada de letras
+    private var prevLyricsPrimary: String = ""
+    private var lastLyricLineKey: String = ""
+    private var lyricTransitionProgress = 1f
+
+    // Estado de desplazamiento horizontal de la tira de playlists
+    private val playlistStripRect = RectF()
+    private val playlistAddRect = RectF()
+    private val playlistCardRectPool = Array(16) { RectF() }
+    private var playlistVisibleCount = 0
+    private val playlistVisibleCards = ArrayList<IslandPlaylistCard>(16)
+    private var playlistScrollX = 0f
+    private var playlistMaxScrollX = 0f
+    private var isDraggingPlaylist = false
+    private var playlistDidDrag = false
+    private var playlistDragStartX = 0f
+    private var playlistDragStartScrollX = 0f
 
     private val touchHandler = Handler(Looper.getMainLooper())
     private var downX = 0f
@@ -167,7 +209,7 @@ class DynamicIslandView(context: Context) : View(context) {
     val isUserSeeking: Boolean get() = isSeeking
 
     private val longPressRunnable = Runnable {
-        if (!gestureHandled && !swipedUp && !swipedDown && !swipedLeft && !swipedRight && !isSeeking && !isSecondTap) {
+        if (!gestureHandled && !swipedUp && !swipedDown && !swipedLeft && !swipedRight && !isSeeking && !isSecondTap && !isDraggingPlaylist) {
             gestureHandled = true
             cancelPendingSingleTap()
             animate().scaleX(1f).scaleY(1f).setDuration(90).start()
@@ -195,6 +237,8 @@ class DynamicIslandView(context: Context) : View(context) {
     private val lyricsNextRect = RectF()
     private var lyricsLayoutKey: List<Any>? = null
     private var lyricsLayout: StaticLayout? = null
+    private var prevLyricsLayoutKey: List<Any>? = null
+    private var prevLyricsLayout: StaticLayout? = null
     private val seekBarRect = RectF()
     private val seekBarHitRect = RectF()
     private val notifFloatBtnRect = RectF()
@@ -239,6 +283,23 @@ class DynamicIslandView(context: Context) : View(context) {
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
+    private val lyricPrimaryPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    }
+    private val lyricOutgoingPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    }
+    private val playlistBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(44, 255, 255, 255)
+        style = Paint.Style.STROKE
+    }
+    private val playlistTitlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    }
+    private val tempRect = RectF()
 
     private val clipPath = Path()
     private val iconRect = RectF()
@@ -308,7 +369,9 @@ class DynamicIslandView(context: Context) : View(context) {
         calibrationGuide: Boolean = state.calibrationGuide,
         aboveStatusBar: Boolean = true,
         lyricsAvailable: Boolean = state.lyricsAvailable,
-        lyricsOpen: Boolean = state.lyricsOpen
+        lyricsOpen: Boolean = state.lyricsOpen,
+        showPlaylistStrip: Boolean = state.showPlaylistStrip,
+        hasPlaylists: Boolean = state.playlists.isNotEmpty()
     ): Int {
         val idleH = Prefs.dynamicIslandIdleHeight(context)
         val topSafe = cameraTopSafeDp()
@@ -338,30 +401,75 @@ class DynamicIslandView(context: Context) : View(context) {
             IslandMode.NOTIFICATION -> topSafe + if (Prefs.islandNotificationPill(context) && !calibrationGuide) 32 else 48
             IslandMode.EXPANDED_NOTIFICATION -> topSafe + (expH - 18).coerceAtLeast(108)
             IslandMode.EXPANDED_HUB -> topSafe + (expH - 12).coerceAtLeast(116)
-            IslandMode.EXPANDED_MEDIA -> topSafe + expH + lyricsHeightDp(lyricsAvailable, lyricsOpen)
+            IslandMode.EXPANDED_MEDIA -> topSafe + expH + mediaFooterHeightDp(
+                lyricsAvailable = lyricsAvailable,
+                lyricsOpen = lyricsOpen,
+                showPlaylistStrip = showPlaylistStrip,
+                hasPlaylists = hasPlaylists
+            )
         }
     }
 
-    private fun lyricsHeightDp(available: Boolean, open: Boolean): Int = when {
-        !available -> 0
-        open -> 112
-        else -> 36
+    private fun mediaFooterHeightDp(
+        lyricsAvailable: Boolean,
+        lyricsOpen: Boolean,
+        showPlaylistStrip: Boolean,
+        hasPlaylists: Boolean
+    ): Int {
+        if (lyricsAvailable && lyricsOpen) return 112
+        val lyricsChipH = if (lyricsAvailable) 32 else 0
+        val playlistH = when {
+            !showPlaylistStrip -> 0
+            hasPlaylists -> 70
+            else -> 36
+        }
+        return lyricsChipH + playlistH
     }
 
     fun render(newState: IslandDisplayState) {
         backgroundAlpha = Prefs.dynamicIslandOpacity(context) * 255 / 100
         textScale = Prefs.dynamicIslandTextScale(context) / 100f
-        val modeChanged = state.mode != newState.mode || state.satellite != newState.satellite
+        val prevState = state
+        val modeChanged = prevState.mode != newState.mode || prevState.satellite != newState.satellite
         if (modeChanged) {
             isSeeking = false
+            isDraggingPlaylist = false
+            playlistDidDrag = false
+            playlistScrollX = 0f
         }
-        if (state.lyricsAvailable != newState.lyricsAvailable) {
+        if (prevState.lyricsAvailable != newState.lyricsAvailable) {
             importantForAccessibility = if (newState.lyricsAvailable) {
                 IMPORTANT_FOR_ACCESSIBILITY_YES
             } else {
                 IMPORTANT_FOR_ACCESSIBILITY_AUTO
             }
         }
+
+        // Detectar cambio de línea o página de letra para animar salida/entrada suavemente
+        if (newState.mode == IslandMode.EXPANDED_MEDIA && newState.lyricsOpen) {
+            val newKey = newState.lyricLineKey.ifEmpty { newState.lyricsPrimary }
+            if (prevState.lyricsOpen && lastLyricLineKey.isNotEmpty() && newKey != lastLyricLineKey && prevState.lyricsPrimary.isNotBlank()) {
+                prevLyricsPrimary = prevState.lyricsPrimary
+                lyricTransitionAnimator?.cancel()
+                lyricTransitionProgress = 0f
+                lyricTransitionAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+                    duration = 300L
+                    interpolator = DecelerateInterpolator(1.6f)
+                    addUpdateListener {
+                        lyricTransitionProgress = it.animatedValue as Float
+                        invalidate()
+                    }
+                    start()
+                }
+            }
+            lastLyricLineKey = newKey
+        } else {
+            lyricTransitionAnimator?.cancel()
+            prevLyricsPrimary = ""
+            lastLyricLineKey = ""
+            lyricTransitionProgress = 1f
+        }
+
         state = newState
 
         if (modeChanged) {
@@ -391,12 +499,36 @@ class DynamicIslandView(context: Context) : View(context) {
         invalidate()
     }
 
+    /** Pulso elástico breve sobre la isla al lanzar Spotlight desde ella. */
+    fun triggerLaunchPulse() {
+        if (state.mode == IslandMode.HIDDEN) return
+        launchPulseAnimator?.cancel()
+        launchPulseAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 240L
+            interpolator = DecelerateInterpolator(1.3f)
+            addUpdateListener { anim ->
+                val p = anim.animatedValue as Float
+                val bump = sin(p * Math.PI).toFloat()
+                launchPulseScaleX = 1f + 0.10f * bump
+                launchPulseScaleY = 1f + 0.16f * bump
+                invalidate()
+            }
+            start()
+        }
+    }
+
     fun hideImmediate() {
         state = IslandDisplayState(mode = IslandMode.HIDDEN)
         isSeeking = false
+        isDraggingPlaylist = false
+        playlistDidDrag = false
         touchHandler.removeCallbacks(longPressRunnable)
         stopLoopAnimation()
         morphAnimator?.cancel()
+        lyricTransitionAnimator?.cancel()
+        launchPulseAnimator?.cancel()
+        launchPulseScaleX = 1f
+        launchPulseScaleY = 1f
         invalidate()
     }
 
@@ -426,6 +558,8 @@ class DynamicIslandView(context: Context) : View(context) {
     override fun onDetachedFromWindow() {
         touchHandler.removeCallbacksAndMessages(null)
         morphAnimator?.cancel()
+        lyricTransitionAnimator?.cancel()
+        launchPulseAnimator?.cancel()
         stopLoopAnimation()
         super.onDetachedFromWindow()
     }
@@ -464,6 +598,20 @@ class DynamicIslandView(context: Context) : View(context) {
                     invalidate()
                     return true
                 }
+                isDraggingPlaylist = state.mode == IslandMode.EXPANDED_MEDIA &&
+                    state.showPlaylistStrip &&
+                    !state.lyricsOpen &&
+                    state.playlists.isNotEmpty() &&
+                    playlistStripRect.contains(event.x, event.y)
+                playlistDidDrag = false
+                if (isDraggingPlaylist) {
+                    playlistDragStartX = event.x
+                    playlistDragStartScrollX = playlistScrollX
+                    cancelPendingSingleTap()
+                    isSecondTap = false
+                    touchHandler.removeCallbacks(longPressRunnable)
+                    return true
+                }
                 if (pendingSingleTap != null && supportsDoubleTap(state.mode)) {
                     cancelPendingSingleTap()
                     isSecondTap = true
@@ -482,6 +630,15 @@ class DynamicIslandView(context: Context) : View(context) {
                 if (isSeeking) {
                     seekPreviewFraction = computeSeekFraction(event.x)
                     invalidate()
+                    return true
+                }
+                if (isDraggingPlaylist) {
+                    val dxStrip = event.x - playlistDragStartX
+                    if (abs(dxStrip) > dp(6f) && playlistMaxScrollX > 0f) {
+                        playlistDidDrag = true
+                        playlistScrollX = (playlistDragStartScrollX - dxStrip).coerceIn(0f, playlistMaxScrollX)
+                        invalidate()
+                    }
                     return true
                 }
                 val dx = event.x - downX
@@ -508,6 +665,14 @@ class DynamicIslandView(context: Context) : View(context) {
                     state = state.copy(progressFraction = target)
                     invalidate()
                     listener?.onMediaSeekTo(target)
+                    return true
+                }
+                if (isDraggingPlaylist) {
+                    val dragged = playlistDidDrag
+                    isDraggingPlaylist = false
+                    playlistDidDrag = false
+                    if (dragged) return true
+                    handleTap(event.x, event.y)
                     return true
                 }
                 if (gestureHandled) {
@@ -551,6 +716,8 @@ class DynamicIslandView(context: Context) : View(context) {
             MotionEvent.ACTION_OUTSIDE -> {
                 cancelPendingSingleTap()
                 isSecondTap = false
+                isDraggingPlaylist = false
+                playlistDidDrag = false
                 listener?.onOutsideTouch()
                 return true
             }
@@ -559,6 +726,8 @@ class DynamicIslandView(context: Context) : View(context) {
                 cancelPendingSingleTap()
                 isSecondTap = false
                 isSeeking = false
+                isDraggingPlaylist = false
+                playlistDidDrag = false
                 animate().scaleX(1f).scaleY(1f).setDuration(105).start()
                 invalidate()
                 return true
@@ -615,18 +784,34 @@ class DynamicIslandView(context: Context) : View(context) {
             return
         }
         when (state.mode) {
-            IslandMode.EXPANDED_MEDIA -> when {
-                state.lyricsAvailable && lyricsToggleRect.contains(x, y) -> listener?.onMediaLyrics()
-                state.lyricsPaging && lyricsPreviousRect.contains(x, y) -> listener?.onMediaLyricsPage(-1)
-                state.lyricsPaging && lyricsNextRect.contains(x, y) -> listener?.onMediaLyricsPage(1)
-                mediaFloatRect.contains(x, y) -> listener?.onMediaOpenFloating()
-                rewindRect.contains(x, y) -> listener?.onMediaSeekBy(-10_000L)
-                prevRect.contains(x, y) -> listener?.onMediaPrev()
-                playRect.contains(x, y) -> listener?.onMediaPlayPause()
-                nextRect.contains(x, y) -> listener?.onMediaNext()
-                forwardRect.contains(x, y) -> listener?.onMediaSeekBy(10_000L)
-                mediaHeaderRect.contains(x, y) -> listener?.onMediaOpenApp()
-                else -> listener?.onTapMain(state.mode)
+            IslandMode.EXPANDED_MEDIA -> {
+                if (state.showPlaylistStrip && !state.lyricsOpen) {
+                    if (!playlistAddRect.isEmpty && playlistAddRect.contains(x, y)) {
+                        listener?.onPlaylistAddTap()
+                        return
+                    }
+                    if (playlistStripRect.contains(x, y)) {
+                        for (i in 0 until playlistVisibleCount) {
+                            if (playlistCardRectPool[i].contains(x, y)) {
+                                listener?.onPlaylistCardTap(playlistVisibleCards[i])
+                                return
+                            }
+                        }
+                    }
+                }
+                when {
+                    state.lyricsAvailable && lyricsToggleRect.contains(x, y) -> listener?.onMediaLyrics()
+                    state.lyricsPaging && lyricsPreviousRect.contains(x, y) -> listener?.onMediaLyricsPage(-1)
+                    state.lyricsPaging && lyricsNextRect.contains(x, y) -> listener?.onMediaLyricsPage(1)
+                    mediaFloatRect.contains(x, y) -> listener?.onMediaOpenFloating()
+                    rewindRect.contains(x, y) -> listener?.onMediaSeekBy(-10_000L)
+                    prevRect.contains(x, y) -> listener?.onMediaPrev()
+                    playRect.contains(x, y) -> listener?.onMediaPlayPause()
+                    nextRect.contains(x, y) -> listener?.onMediaNext()
+                    forwardRect.contains(x, y) -> listener?.onMediaSeekBy(10_000L)
+                    mediaHeaderRect.contains(x, y) -> listener?.onMediaOpenApp()
+                    else -> listener?.onTapMain(state.mode)
+                }
             }
             IslandMode.EXPANDED_NOTIFICATION -> when {
                 notifFloatBtnRect.contains(x, y) -> listener?.onNotificationOpenFloating()
@@ -687,8 +872,8 @@ class DynamicIslandView(context: Context) : View(context) {
 
         val scale = morphProgress.coerceIn(0.72f, 1.03f)
         val fullMainW = if (showSat) (width - satDiameter - satGap).coerceAtLeast(dp(64f)) else width.toFloat()
-        val drawW = (fullMainW * scale).coerceAtMost(fullMainW)
-        val drawH = (height * (0.86f + 0.14f * scale)).coerceAtMost(height.toFloat())
+        val drawW = (fullMainW * scale * launchPulseScaleX).coerceAtMost(fullMainW)
+        val drawH = (height * (0.86f + 0.14f * scale) * launchPulseScaleY).coerceAtMost(height.toFloat())
 
         val totalRowW = if (showSat) drawW + satGap + satDiameter else drawW
         val startX = (width - totalRowW) / 2f
@@ -1022,7 +1207,13 @@ class DynamicIslandView(context: Context) : View(context) {
 
     private fun drawExpandedMedia(canvas: Canvas, primaryArgb: Int, secondaryArgb: Int, topSafePx: Float) {
         val padH = dp(16f)
-        val playerBottom = pillRect.bottom - dp(lyricsHeightDp(state.lyricsAvailable, state.lyricsOpen).toFloat())
+        val footerDp = mediaFooterHeightDp(
+            lyricsAvailable = state.lyricsAvailable,
+            lyricsOpen = state.lyricsOpen,
+            showPlaylistStrip = state.showPlaylistStrip,
+            hasPlaylists = state.playlists.isNotEmpty()
+        )
+        val playerBottom = pillRect.bottom - dp(footerDp.toFloat())
         val availH = (playerBottom - topSafePx).coerceAtLeast(dp(106f))
         val artSize = dp(46f).coerceAtMost(availH * 0.42f)
         val artLeft = pillRect.left + padH
@@ -1196,12 +1387,159 @@ class DynamicIslandView(context: Context) : View(context) {
         canvas.drawRoundRect(forwardRect, controlsH / 2f, controlsH / 2f, chipPaint)
         badgePaint.color = Color.argb(225, 236, 240, 248)
         canvas.drawText("+10", forwardRect.centerX(), seekBaseline, badgePaint)
-        if (state.lyricsAvailable) drawMediaLyrics(canvas, playerBottom, primaryArgb)
+
+        // Reset hit rects del footer antes de dibujarlo
+        lyricsToggleRect.setEmpty()
+        lyricsPreviousRect.setEmpty()
+        lyricsNextRect.setEmpty()
+        playlistStripRect.setEmpty()
+        playlistAddRect.setEmpty()
+        playlistVisibleCount = 0
+        playlistVisibleCards.clear()
+
+        if (state.lyricsAvailable) {
+            drawMediaLyrics(canvas, playerBottom, primaryArgb)
+        }
+        if (state.showPlaylistStrip && !state.lyricsOpen) {
+            val stripTop = playerBottom + if (state.lyricsAvailable) dp(32f) else 0f
+            drawPlaylistStrip(canvas, stripTop, padH, primaryArgb)
+        }
+    }
+
+    private fun drawPlaylistStrip(canvas: Canvas, top: Float, padH: Float, accent: Int) {
+        val left = pillRect.left + padH
+        val right = pillRect.right - padH
+        val availW = (right - left).coerceAtLeast(dp(80f))
+
+        if (state.playlists.isEmpty()) {
+            val pillW = dp(112f).coerceAtMost(availW)
+            val pillH = dp(26f)
+            val cx = pillRect.centerX()
+            val cy = top + dp(14f)
+            playlistAddRect.set(cx - pillW / 2f, cy - pillH / 2f, cx + pillW / 2f, cy + pillH / 2f)
+            playlistStripRect.set(playlistAddRect)
+            playlistMaxScrollX = 0f
+            playlistScrollX = 0f
+
+            chipPaint.color = Color.argb(28, 255, 255, 255)
+            canvas.drawRoundRect(playlistAddRect, pillH / 2f, pillH / 2f, chipPaint)
+            playlistBorderPaint.strokeWidth = dp(0.8f)
+            canvas.drawRoundRect(playlistAddRect, pillH / 2f, pillH / 2f, playlistBorderPaint)
+
+            badgePaint.textSize = dp(11f)
+            badgePaint.color = Color.argb(235, 242, 245, 252)
+            val base = cy - (badgePaint.ascent() + badgePaint.descent()) / 2f
+            canvas.drawText("+ Playlists", cx, base, badgePaint)
+            return
+        }
+
+        val cardSize = dp(56f)
+        val gap = dp(7f)
+        val radius = dp(10f)
+        val cardsTop = top + dp(2f)
+        val cardsBottom = cardsTop + cardSize
+        playlistStripRect.set(left, cardsTop - dp(2f), right, cardsBottom + dp(4f))
+
+        val cards = state.playlists.take(playlistCardRectPool.size)
+        val showAddTile = cards.all { it.queueId == null } || cards.size <= 4
+        val addTileW = if (showAddTile) dp(40f) else 0f
+        val totalContentW = cards.size * cardSize + (cards.size - 1).coerceAtLeast(0) * gap +
+            if (showAddTile) gap + addTileW else 0f
+        playlistMaxScrollX = (totalContentW - availW).coerceAtLeast(0f)
+        playlistScrollX = playlistScrollX.coerceIn(0f, playlistMaxScrollX)
+
+        // Si caben todas sin scroll, centrarlas limpiamente; si hacen scroll, alinear al borde izquierdo
+        val startOffset = if (playlistMaxScrollX <= 0f) (availW - totalContentW) / 2f else -playlistScrollX
+
+        canvas.save()
+        canvas.clipRect(left, cardsTop - dp(1f), right, cardsBottom + dp(1f))
+
+        var cursorX = left + startOffset
+        for (i in cards.indices) {
+            val card = cards[i]
+            val cardRect = playlistCardRectPool[i]
+            cardRect.set(cursorX, cardsTop, cursorX + cardSize, cardsBottom)
+            playlistVisibleCards.add(card)
+            playlistVisibleCount++
+
+            if (cardRect.right >= left - dp(4f) && cardRect.left <= right + dp(4f)) {
+                drawPlaylistCard(canvas, card, cardRect, radius, accent)
+            }
+            cursorX += cardSize + gap
+        }
+
+        if (showAddTile) {
+            playlistAddRect.set(cursorX, cardsTop, cursorX + addTileW, cardsBottom)
+            if (playlistAddRect.right >= left && playlistAddRect.left <= right) {
+                chipPaint.color = Color.argb(24, 255, 255, 255)
+                canvas.drawRoundRect(playlistAddRect, radius, radius, chipPaint)
+                playlistBorderPaint.strokeWidth = dp(0.8f)
+                canvas.drawRoundRect(playlistAddRect, radius, radius, playlistBorderPaint)
+                badgePaint.textSize = dp(18f)
+                badgePaint.color = Color.argb(210, 255, 255, 255)
+                val base = playlistAddRect.centerY() - (badgePaint.ascent() + badgePaint.descent()) / 2f
+                canvas.drawText("+", playlistAddRect.centerX(), base, badgePaint)
+            } else {
+                playlistAddRect.setEmpty()
+            }
+        }
+
+        canvas.restore()
+    }
+
+    private fun drawPlaylistCard(canvas: Canvas, card: IslandPlaylistCard, rect: RectF, radius: Float, fallbackAccent: Int) {
+        val bmp = card.art?.takeIf { !it.isRecycled }
+        clipPath.reset()
+        clipPath.addRoundRect(rect, radius, radius, Path.Direction.CW)
+        canvas.save()
+        canvas.clipPath(clipPath)
+
+        if (bmp != null) {
+            canvas.drawBitmap(bmp, null, rect, bitmapPaint)
+        } else {
+            val pair = PLAYLIST_GRADIENTS[abs(card.id.hashCode()) % PLAYLIST_GRADIENTS.size]
+            chipPaint.shader = LinearGradient(
+                rect.left, rect.top, rect.right, rect.bottom,
+                pair.first, pair.second,
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawRect(rect, chipPaint)
+            chipPaint.shader = null
+            drawMusicNoteGlyph(canvas, rect.centerX(), rect.centerY() - dp(5f), dp(9f), withAlpha(Color.WHITE, 215))
+        }
+
+        // Scrim oscuro inferior para legibilidad nítida del título estilo widget de Spotify
+        chipPaint.shader = LinearGradient(
+            rect.left, rect.top + rect.height() * 0.36f, rect.left, rect.bottom,
+            intArrayOf(Color.TRANSPARENT, Color.argb(145, 0, 0, 0), Color.argb(225, 0, 0, 0)),
+            floatArrayOf(0f, 0.55f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawRect(rect, chipPaint)
+        chipPaint.shader = null
+
+        playlistTitlePaint.textSize = dp(9.2f) * textScale.coerceIn(0.9f, 1.08f)
+        playlistTitlePaint.color = Color.WHITE
+        val pad = dp(4.5f)
+        val label = TextUtils.ellipsize(
+            card.title,
+            playlistTitlePaint,
+            (rect.width() - pad * 2f).coerceAtLeast(dp(12f)),
+            TextUtils.TruncateAt.END
+        ).toString()
+        val textY = rect.bottom - dp(5.5f)
+        canvas.drawText(label, rect.left + pad, textY, playlistTitlePaint)
+
+        canvas.restore()
+
+        playlistBorderPaint.strokeWidth = dp(0.75f)
+        playlistBorderPaint.color = withAlpha(if (bmp != null) Color.WHITE else fallbackAccent, 46)
+        canvas.drawRoundRect(rect, radius, radius, playlistBorderPaint)
     }
 
     private fun drawMediaLyrics(canvas: Canvas, top: Float, accent: Int) {
         val center = pillRect.centerX()
-        lyricsToggleRect.set(center - dp(58f), top - dp(3f), center + dp(58f), top + dp(30f))
+        lyricsToggleRect.set(center - dp(58f), top - dp(2f), center + dp(58f), top + dp(26f))
         chipPaint.color = withAlpha(accent, if (state.lyricsOpen) 72 else 44)
         canvas.drawRoundRect(lyricsToggleRect, dp(13f), dp(13f), chipPaint)
         badgePaint.textSize = dp(11f)
@@ -1214,36 +1552,138 @@ class DynamicIslandView(context: Context) : View(context) {
         val pad = dp(16f)
         val side = if (state.lyricsPaging) dp(30f) else 0f
         val textWidth = (pillRect.width() - (pad + side) * 2f).toInt().coerceAtLeast(1)
-        val lineSize = dp(13f) * textScale
+        val lineSize = dp(13.2f) * textScale
+        val t = lyricTransitionProgress.coerceIn(0f, 1f)
+
         val key = listOf(state.lyricsPrimary, textWidth, lineSize)
         if (key != lyricsLayoutKey) {
             lyricsLayoutKey = key
-            val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.WHITE
-                textSize = lineSize
-            }
-            lyricsLayout = StaticLayout.Builder.obtain(state.lyricsPrimary, 0, state.lyricsPrimary.length, paint, textWidth)
+            lyricPrimaryPaint.textSize = lineSize
+            lyricPrimaryPaint.shader = null
+            lyricPrimaryPaint.color = Color.WHITE
+            lyricsLayout = StaticLayout.Builder.obtain(
+                state.lyricsPrimary, 0, state.lyricsPrimary.length, lyricPrimaryPaint, textWidth
+            )
                 .setAlignment(Layout.Alignment.ALIGN_CENTER)
                 .setMaxLines(2)
                 .setEllipsize(TextUtils.TruncateAt.END)
                 .setIncludePad(false)
                 .build()
         }
+
+        val clipTop = top + dp(30f)
+        val clipBottom = top + dp(108f)
+        canvas.save()
+        canvas.clipRect(pillRect.left + pad, clipTop, pillRect.right - pad, clipBottom)
+
+        // 1. Línea saliente animada hacia arriba y desvaneciéndose
+        if (t < 1f && prevLyricsPrimary.isNotBlank()) {
+            val prevKey = listOf(prevLyricsPrimary, textWidth, lineSize)
+            if (prevKey != prevLyricsLayoutKey) {
+                prevLyricsLayoutKey = prevKey
+                lyricOutgoingPaint.textSize = lineSize
+                prevLyricsLayout = StaticLayout.Builder.obtain(
+                    prevLyricsPrimary, 0, prevLyricsPrimary.length, lyricOutgoingPaint, textWidth
+                )
+                    .setAlignment(Layout.Alignment.ALIGN_CENTER)
+                    .setMaxLines(2)
+                    .setEllipsize(TextUtils.TruncateAt.END)
+                    .setIncludePad(false)
+                    .build()
+            }
+            val outLayout = prevLyricsLayout
+            if (outLayout != null) {
+                val outAlpha = ((1f - t) * 235f).toInt().coerceIn(0, 255)
+                val outOffsetY = -dp(14f) * t
+                lyricOutgoingPaint.color = Color.argb(outAlpha, 255, 255, 255)
+                canvas.save()
+                canvas.translate(center - textWidth / 2f, top + dp(38f) + outOffsetY)
+                outLayout.draw(canvas)
+                canvas.restore()
+            }
+        }
+
+        // 2. Línea entrante/activa con escala suave y barrido karaoke en tiempo real
         val layout = lyricsLayout
-        if (layout != null) {
+        if (layout != null && state.lyricsPrimary.isNotBlank()) {
+            val inOffsetY = dp(14f) * (1f - t)
+            val inScale = 0.94f + 0.06f * t
+            val inAlpha = ((0.45f + 0.55f * t) * 255f).toInt().coerceIn(0, 255)
+            val baseX = center - textWidth / 2f
+            val baseY = top + dp(38f) + inOffsetY
+
+            val hasKaraoke = state.lyricLineEndMs > state.lyricLineStartMs && state.lyricPositionUpdatedAtMs > 0L
+            val karaokeProgress = if (hasKaraoke) {
+                val livePosMs = if (state.playing) {
+                    val elapsed = (SystemClock.elapsedRealtime() - state.lyricPositionUpdatedAtMs).coerceAtLeast(0L)
+                    state.lyricBasePositionMs + (elapsed * state.lyricPlaybackSpeed).toLong()
+                } else {
+                    state.lyricBasePositionMs
+                }
+                val span = (state.lyricLineEndMs - state.lyricLineStartMs).coerceAtLeast(250L)
+                ((livePosMs - state.lyricLineStartMs).toFloat() / span.toFloat()).coerceIn(0f, 1f)
+            } else {
+                -1f
+            }
+
             canvas.save()
-            canvas.translate(center - textWidth / 2f, top + dp(40f))
-            layout.draw(canvas)
+            canvas.translate(center, baseY + layout.height / 2f)
+            canvas.scale(inScale, inScale)
+            canvas.translate(-textWidth / 2f, -layout.height / 2f)
+
+            if (hasKaraoke && layout.lineCount > 0) {
+                val sungColor = Color.argb(inAlpha, 255, 255, 255)
+                val unsungColor = Color.argb((inAlpha * 0.46f).toInt(), 214, 224, 240)
+                val totalChars = state.lyricsPrimary.length.coerceAtLeast(1)
+                for (lineIdx in 0 until layout.lineCount) {
+                    val start = layout.getLineStart(lineIdx)
+                    val end = layout.getLineVisibleEnd(lineIdx)
+                    if (end <= start) continue
+                    val lineFracStart = start.toFloat() / totalChars
+                    val lineFracEnd = end.toFloat() / totalChars
+                    val lineSpan = (lineFracEnd - lineFracStart).coerceAtLeast(0.01f)
+                    val lineProgress = ((karaokeProgress - lineFracStart) / lineSpan).coerceIn(0f, 1f)
+                    val lineLeft = layout.getLineLeft(lineIdx)
+                    val lineRight = layout.getLineRight(lineIdx)
+                    val lineW = (lineRight - lineLeft).coerceAtLeast(1f)
+                    val feather = 0.08f
+                    val p0 = (lineProgress - feather * 0.5f).coerceIn(0f, 1f)
+                    val p1 = (lineProgress + feather * 0.5f).coerceIn(0f, 1f)
+                    lyricPrimaryPaint.shader = LinearGradient(
+                        lineLeft, 0f, lineLeft + lineW, 0f,
+                        intArrayOf(sungColor, sungColor, unsungColor, unsungColor),
+                        floatArrayOf(0f, p0, p1, 1f),
+                        Shader.TileMode.CLAMP
+                    )
+                    val lineBaseline = layout.getLineBaseline(lineIdx).toFloat()
+                    canvas.drawText(layout.text, start, end, lineLeft, lineBaseline, lyricPrimaryPaint)
+                }
+                lyricPrimaryPaint.shader = null
+            } else {
+                lyricPrimaryPaint.shader = null
+                lyricPrimaryPaint.color = Color.argb(inAlpha, 255, 255, 255)
+                layout.draw(canvas)
+            }
             canvas.restore()
         }
-        badgePaint.textSize = dp(11f) * textScale
-        badgePaint.color = Color.argb(185, 214, 222, 236)
-        val next = TextUtils.ellipsize(state.lyricsSecondary, badgePaint, textWidth.toFloat(), TextUtils.TruncateAt.END)
-        canvas.drawText(next.toString(), center, top + dp(91f), badgePaint)
+
+        // 3. Próxima línea (opacidad atenuada y deslizamiento suave)
+        if (state.lyricsSecondary.isNotBlank()) {
+            val secOffsetY = dp(8f) * (1f - t)
+            val secAlpha = ((0.30f + 0.22f * t) * 255f).toInt().coerceIn(0, 255)
+            badgePaint.textSize = dp(11f) * textScale
+            badgePaint.color = Color.argb(secAlpha, 214, 222, 236)
+            val next = TextUtils.ellipsize(state.lyricsSecondary, badgePaint, textWidth.toFloat(), TextUtils.TruncateAt.END)
+            canvas.drawText(next.toString(), center, top + dp(91f) + secOffsetY, badgePaint)
+        }
+
+        canvas.restore()
+
         if (state.lyricsPaging) {
             lyricsPreviousRect.set(pillRect.left + pad, top + dp(37f), pillRect.left + pad + side, top + dp(86f))
             lyricsNextRect.set(pillRect.right - pad - side, top + dp(37f), pillRect.right - pad, top + dp(86f))
             badgePaint.textSize = dp(20f)
+            badgePaint.color = Color.argb(200, 220, 228, 240)
             canvas.drawText("‹", lyricsPreviousRect.centerX(), top + dp(66f), badgePaint)
             canvas.drawText("›", lyricsNextRect.centerX(), top + dp(66f), badgePaint)
         }
@@ -1675,5 +2115,14 @@ class DynamicIslandView(context: Context) : View(context) {
         private const val COLOR_BLUE = 0xFF38BDF8.toInt()
         private const val COLOR_AMBER = 0xFFFBBF24.toInt()
         private const val COLOR_CORAL = 0xFFFB7185.toInt()
+
+        private val PLAYLIST_GRADIENTS = listOf(
+            0xFF1DB954.toInt() to 0xFF0E4D2A.toInt(),
+            0xFF7C3AED.toInt() to 0xFF312E81.toInt(),
+            0xFF0284C7.toInt() to 0xFF1E3A5F.toInt(),
+            0xFFE11D48.toInt() to 0xFF581C37.toInt(),
+            0xFFD97706.toInt() to 0xFF5B2C06.toInt(),
+            0xFF0D9488.toInt() to 0xFF134E4A.toInt()
+        )
     }
 }

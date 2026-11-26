@@ -586,4 +586,64 @@ object Prefs {
     fun setSpotlightAutoOpen(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean("spotlight_auto_open", enabled).apply()
     }
+
+    fun dynamicIslandShowPlaylists(context: Context): Boolean =
+        prefs(context).getBoolean("dynamic_island_show_playlists", true)
+
+    fun setDynamicIslandShowPlaylists(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("dynamic_island_show_playlists", enabled).apply()
+    }
+
+    fun pinnedPlaylists(context: Context): List<PinnedPlaylist> = runCatching {
+        val raw = prefs(context).getString("pinned_playlists", "[]").orEmpty()
+        val array = JSONArray(raw)
+        buildList {
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i) ?: continue
+                val id = obj.optString("id").trim()
+                val title = obj.optString("title").trim()
+                val url = obj.optString("url").trim()
+                val artPath = obj.optString("artPath").trim().takeIf { it.isNotEmpty() }
+                if (id.isNotEmpty() && url.isNotEmpty()) {
+                    add(PinnedPlaylist(id = id, title = title.ifBlank { "Playlist" }, url = url, artPath = artPath))
+                }
+            }
+        }
+    }.getOrDefault(emptyList())
+
+    fun savePinnedPlaylists(context: Context, playlists: List<PinnedPlaylist>) {
+        val array = JSONArray()
+        playlists.take(16).forEach { item ->
+            array.put(
+                JSONObject().apply {
+                    put("id", item.id)
+                    put("title", item.title)
+                    put("url", item.url)
+                    if (!item.artPath.isNullOrBlank()) put("artPath", item.artPath)
+                }
+            )
+        }
+        prefs(context).edit().putString("pinned_playlists", array.toString()).apply()
+    }
+
+    fun addPinnedPlaylist(context: Context, playlist: PinnedPlaylist): List<PinnedPlaylist> {
+        val current = pinnedPlaylists(context).filterNot { it.id == playlist.id || it.url.equals(playlist.url, ignoreCase = true) }
+        val updated = (current + playlist).takeLast(16)
+        savePinnedPlaylists(context, updated)
+        return updated
+    }
+
+    fun removePinnedPlaylist(context: Context, id: String): List<PinnedPlaylist> {
+        val updated = pinnedPlaylists(context).filterNot { it.id == id }
+        savePinnedPlaylists(context, updated)
+        return updated
+    }
 }
+
+data class PinnedPlaylist(
+    val id: String,
+    val title: String,
+    val url: String,
+    val artPath: String? = null
+)
+

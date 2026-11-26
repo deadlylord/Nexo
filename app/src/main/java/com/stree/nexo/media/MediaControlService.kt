@@ -12,6 +12,12 @@ import androidx.core.app.NotificationManagerCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+data class QueueTrack(
+    val queueId: Long,
+    val title: String,
+    val art: android.graphics.Bitmap? = null
+)
+
 data class NowPlaying(
     val title: String,
     val artist: String,
@@ -23,7 +29,8 @@ data class NowPlaying(
     val durationMs: Long = 0L,
     val positionMs: Long = 0L,
     val positionUpdateTimeMs: Long = 0L,
-    val playbackSpeed: Float = 1f
+    val playbackSpeed: Float = 1f,
+    val queue: List<QueueTrack> = emptyList()
 )
 
 enum class OpenMusicResult {
@@ -89,6 +96,14 @@ class MediaControlService : NotificationListenerService() {
 
             return if (fallbackOpened) OpenMusicResult.OPENED else OpenMusicResult.NO_ACTIVE_APP
         }
+
+        fun skipToQueueItem(queueId: Long): Boolean {
+            val controller = playback.value?.controller ?: return false
+            return runCatching {
+                controller.transportControls.skipToQueueItem(queueId)
+                true
+            }.getOrDefault(false)
+        }
     }
 
     private val manager by lazy { getSystemService(MediaSessionManager::class.java) }
@@ -99,6 +114,7 @@ class MediaControlService : NotificationListenerService() {
     private val callback = object : MediaController.Callback() {
         override fun onPlaybackStateChanged(state: PlaybackState?) = publish()
         override fun onMetadataChanged(metadata: MediaMetadata?) = publish()
+        override fun onQueueChanged(queue: MutableList<android.media.session.MediaSession.QueueItem>?) = publish()
         override fun onSessionDestroyed() = reload()
     }
     private val sessions = MediaSessionManager.OnActiveSessionsChangedListener { reload() }
@@ -132,6 +148,22 @@ class MediaControlService : NotificationListenerService() {
                     } else bmp
                 }.getOrNull()
             }
+            val queueItems = runCatching {
+                controller.queue.orEmpty()
+                    .take(8)
+                    .mapNotNull { item ->
+                        val desc = item?.description ?: return@mapNotNull null
+                        val title = desc.title?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                        val iconBmp = desc.iconBitmap?.let { bmp ->
+                            runCatching {
+                                if (bmp.width > 128 || bmp.height > 128) {
+                                    android.graphics.Bitmap.createScaledBitmap(bmp, 120, 120, true)
+                                } else bmp
+                            }.getOrNull()
+                        }
+                        QueueTrack(queueId = item.queueId, title = title, art = iconBmp)
+                    }
+            }.getOrDefault(emptyList())
             NowPlaying(
                 title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)
                     ?: metadata?.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE) ?: "Reproducción multimedia",
@@ -144,7 +176,8 @@ class MediaControlService : NotificationListenerService() {
                 durationMs = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION)?.coerceAtLeast(0L) ?: 0L,
                 positionMs = pb?.position?.coerceAtLeast(0L) ?: 0L,
                 positionUpdateTimeMs = pb?.lastPositionUpdateTime ?: android.os.SystemClock.elapsedRealtime(),
-                playbackSpeed = pb?.playbackSpeed ?: 1f
+                playbackSpeed = pb?.playbackSpeed ?: 1f,
+                queue = queueItems
             )
         }
     }

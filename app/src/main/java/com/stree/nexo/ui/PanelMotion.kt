@@ -32,10 +32,13 @@ object PanelMotion {
     const val SCRIM_EXIT_MS = 165
     const val LAYOUT_DURATION_MS = 190
     const val TAB_DURATION_MS = 230
+    const val SPOTLIGHT_ENTER_DURATION_MS = 310
+    const val SPOTLIGHT_EXIT_DURATION_MS = 210
 
     val EnterEasing = CubicBezierEasing(0.18f, 0.90f, 0.22f, 1.0f)
     val ExitEasing = CubicBezierEasing(0.40f, 0.0f, 0.85f, 0.15f)
     val StandardEasing = CubicBezierEasing(0.20f, 0.0f, 0.0f, 1.0f)
+    val IslandEmergeEasing = CubicBezierEasing(0.16f, 1.0f, 0.30f, 1.0f)
 
     fun sideEnter(side: PanelSide): EnterTransition =
         slideInHorizontally(

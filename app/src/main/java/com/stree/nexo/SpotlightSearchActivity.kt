@@ -12,21 +12,18 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,6 +32,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color as ComposeColor
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.util.lerp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.stree.nexo.data.Haptics
 import com.stree.nexo.data.Prefs
@@ -49,7 +51,6 @@ import com.stree.nexo.ui.disableSystemTransitions
 import com.stree.nexo.ui.finishNoSystemAnimation
 import com.stree.nexo.ui.theme.NexoTheme
 import com.stree.nexo.ui.theme.PanelTheme
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Overlay global de búsqueda estilo iPhone Spotlight accesible por gesto o acceso directo. */
@@ -76,23 +77,40 @@ class SpotlightSearchActivity : ComponentActivity() {
 
         EdgePanelService.setPanelOpen(true)
 
+        val islandTopOffsetDp = Prefs.dynamicIslandTopOffset(this)
+        val islandHorizontalOffsetDp = Prefs.dynamicIslandHorizontalOffset(this)
+        val islandIdleHeightDp = Prefs.dynamicIslandIdleHeight(this)
+
         setContent {
             NexoTheme(darkTheme = true) {
                 val style = remember(Prefs.themeRevision) { Prefs.panelStyle(this) }
                 PanelTheme(style) {
                     val state by viewModel.state.collectAsStateWithLifecycle()
                     val scope = rememberCoroutineScope()
-                    var shown by remember { mutableStateOf(false) }
+                    val progress = remember { Animatable(0f) }
                     var closing by remember { mutableStateOf(false) }
 
-                    LaunchedEffect(Unit) { shown = true }
+                    LaunchedEffect(Unit) {
+                        progress.animateTo(
+                            targetValue = 1f,
+                            animationSpec = tween(
+                                durationMillis = PanelMotion.SPOTLIGHT_ENTER_DURATION_MS,
+                                easing = PanelMotion.IslandEmergeEasing
+                            )
+                        )
+                    }
 
                     val dismiss: () -> Unit = {
                         if (!closing) {
                             closing = true
-                            shown = false
                             scope.launch {
-                                delay(PanelMotion.EXIT_DURATION_MS.toLong())
+                                progress.animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = tween(
+                                        durationMillis = PanelMotion.SPOTLIGHT_EXIT_DURATION_MS,
+                                        easing = PanelMotion.ExitEasing
+                                    )
+                                )
                                 finishNoSystemAnimation(removeTask = true)
                             }
                         }
@@ -100,16 +118,11 @@ class SpotlightSearchActivity : ComponentActivity() {
 
                     BackHandler { dismiss() }
 
-                    val scrimAlpha by animateFloatAsState(
-                        targetValue = if (shown) 0.56f else 0f,
-                        animationSpec = tween(
-                            durationMillis = if (shown) PanelMotion.SCRIM_ENTER_MS else PanelMotion.SCRIM_EXIT_MS,
-                            easing = if (shown) PanelMotion.EnterEasing else PanelMotion.ExitEasing
-                        ),
-                        label = "spotlightScrim"
-                    )
+                    val t = progress.value.coerceIn(0f, 1f)
+                    val scrimAlpha = 0.56f * t
+                    val density = LocalDensity.current
 
-                    Box(
+                    BoxWithConstraints(
                         modifier = Modifier
                             .fillMaxSize()
                             .background(ComposeColor.Black.copy(alpha = scrimAlpha))
@@ -119,16 +132,27 @@ class SpotlightSearchActivity : ComponentActivity() {
                                 onClick = dismiss
                             )
                     ) {
-                        AnimatedVisibility(
-                            visible = shown,
-                            enter = slideInVertically(
-                                animationSpec = tween(PanelMotion.ENTER_DURATION_MS, easing = PanelMotion.EnterEasing),
-                                initialOffsetY = { -it / 10 }
-                            ) + fadeIn(tween(PanelMotion.ENTER_DURATION_MS)),
-                            exit = slideOutVertically(
-                                animationSpec = tween(PanelMotion.EXIT_DURATION_MS, easing = PanelMotion.ExitEasing),
-                                targetOffsetY = { -it / 12 }
-                            ) + fadeOut(tween(PanelMotion.EXIT_DURATION_MS))
+                        val widthPx = with(density) { maxWidth.toPx().coerceAtLeast(1f) }
+                        val heightPx = with(density) { maxHeight.toPx().coerceAtLeast(1f) }
+                        val islandCenterX = widthPx / 2f + with(density) { islandHorizontalOffsetDp.dp.toPx() }
+                        val islandTopPx = with(density) { islandTopOffsetDp.dp.toPx() }
+                        val islandCenterY = islandTopPx + with(density) { (islandIdleHeightDp / 2f).dp.toPx() }
+                        val pivotX = (islandCenterX / widthPx).coerceIn(0.15f, 0.85f)
+                        val pivotY = (islandCenterY / heightPx).coerceIn(0.01f, 0.22f)
+                        val cornerRadiusDp = lerp(40f, 0f, t).dp
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    transformOrigin = TransformOrigin(pivotX, pivotY)
+                                    scaleX = lerp(0.18f, 1f, t)
+                                    scaleY = lerp(0.06f, 1f, t)
+                                    translationY = lerp(-islandTopPx * 0.35f, 0f, t)
+                                    alpha = (t / 0.35f).coerceIn(0f, 1f)
+                                    shape = RoundedCornerShape(cornerRadiusDp)
+                                    clip = t < 0.995f
+                                }
                         ) {
                             SpotlightSearchContent(
                                 state = state,

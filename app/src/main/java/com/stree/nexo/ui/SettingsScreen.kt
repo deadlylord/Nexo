@@ -14,6 +14,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -50,6 +51,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ColorLens
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
@@ -74,6 +76,7 @@ import androidx.compose.material.icons.filled.ViewCarousel
 import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -95,11 +98,14 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -137,6 +143,7 @@ import com.stree.nexo.panel.EdgePanelService
 import com.stree.nexo.ui.theme.PanelTheme
 import com.stree.nexo.ui.theme.visualSpec
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
@@ -1875,6 +1882,7 @@ private fun DynamicIslandCard() {
                         Prefs.setDynamicIslandMediaKeepPaused(context, it)
                     }
                 )
+                IslandPlaylistsSettings()
             }
             SwitchRow(
                 title = "Ocultar automáticamente en horizontal",
@@ -2133,6 +2141,218 @@ private fun DynamicIslandCard() {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun IslandPlaylistsSettings() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var showPlaylists by remember { mutableStateOf(Prefs.dynamicIslandShowPlaylists(context)) }
+    var playlists by remember { mutableStateOf(Prefs.pinnedPlaylists(context)) }
+    var showAddDialog by remember { mutableStateOf(false) }
+
+    SwitchRow(
+        title = "Playlists en la Isla",
+        subtitle = "Muestra tus playlists fijadas (o la cola activa) como tarjetas rápidas bajo el reproductor",
+        checked = showPlaylists,
+        onCheckedChange = { enabled ->
+            showPlaylists = enabled
+            Prefs.setDynamicIslandShowPlaylists(context, enabled)
+            EdgePanelService.refreshIslandLive()
+        }
+    )
+
+    if (showPlaylists) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            playlists.forEach { item ->
+                var artBitmap by remember(item.artPath) {
+                    mutableStateOf(com.stree.nexo.media.PlaylistMetadata.getCachedPlaylistArt(item.artPath))
+                }
+                LaunchedEffect(item.artPath) {
+                    if (artBitmap == null && !item.artPath.isNullOrBlank()) {
+                        artBitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            com.stree.nexo.media.PlaylistMetadata.loadPlaylistArt(item.artPath)
+                        }
+                    }
+                }
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+                    border = BorderStroke(0.7.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val bmp = artBitmap
+                            if (bmp != null && !bmp.isRecycled) {
+                                Image(
+                                    bitmap = bmp.asImageBitmap(),
+                                    contentDescription = item.title,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Filled.MusicNote,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = item.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = item.url,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                Haptics.perform(context)
+                                com.stree.nexo.media.PlaylistMetadata.deletePlaylistArt(item.artPath)
+                                playlists = Prefs.removePinnedPlaylist(context, item.id)
+                                EdgePanelService.refreshIslandLive()
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Delete,
+                                contentDescription = "Quitar playlist",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            FilledTonalButton(
+                onClick = {
+                    Haptics.perform(context)
+                    showAddDialog = true
+                },
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("Añadir playlist", style = MaterialTheme.typography.labelLarge)
+            }
+        }
+    }
+
+    if (showAddDialog) {
+        var urlInput by remember { mutableStateOf("") }
+        var titleInput by remember { mutableStateOf("") }
+        var loading by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { if (!loading) showAddDialog = false },
+            title = { Text("Añadir playlist a la Isla") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Pega un enlace de Spotify, YouTube Music, Apple Music o SoundCloud. La portada y el título se detectan automáticamente.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = urlInput,
+                        onValueChange = { urlInput = it },
+                        label = { Text("Enlace de playlist") },
+                        placeholder = { Text("https://open.spotify.com/playlist/...") },
+                        singleLine = true,
+                        enabled = !loading,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = titleInput,
+                        onValueChange = { titleInput = it },
+                        label = { Text("Nombre (opcional)") },
+                        placeholder = { Text("Se detecta automáticamente") },
+                        singleLine = true,
+                        enabled = !loading,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (loading) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Text(
+                                text = "Obteniendo portada y título…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !loading && urlInput.trim().isNotEmpty(),
+                    onClick = {
+                        val rawUrl = urlInput.trim()
+                        val customTitle = titleInput.trim().takeIf { it.isNotEmpty() }
+                        loading = true
+                        scope.launch {
+                            val item = com.stree.nexo.media.PlaylistMetadata.fetchPlaylistMetadata(
+                                context = context,
+                                rawUrl = rawUrl,
+                                fallbackTitle = customTitle
+                            )
+                            playlists = Prefs.addPinnedPlaylist(context, item)
+                            EdgePanelService.refreshIslandLive()
+                            loading = false
+                            showAddDialog = false
+                            Toast.makeText(context, "Añadida: ${item.title}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                ) {
+                    Text("Guardar")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !loading,
+                    onClick = { showAddDialog = false }
+                ) {
+                    Text("Cancelar")
+                }
+            }
+        )
     }
 }
 
