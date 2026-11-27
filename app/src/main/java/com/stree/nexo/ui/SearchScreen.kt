@@ -2287,11 +2287,15 @@ private fun SearchPage(
             val pinned = state.sections.flatMap { it.items }.filter {
                 it.id in state.pinnedIds && it.type != ItemType.SETTING
             }.distinctBy { it.id }
-            val frequentFill = state.frequentApps
-                .ifEmpty { state.allItems.filter { it.type == ItemType.APP } }
+            val fallbackApps = state.allItems.filter { it.type == ItemType.APP && it.id !in state.pinnedIds }
+            val frequentPool = state.frequentApps
+                .ifEmpty { fallbackApps }
                 .filterNot { it.id in state.pinnedIds }
-            // Las apps ancladas ocupan sus posiciones y, si no llenan el panel,
-            // se mide el área real visible y se completa con las frecuentes no ancladas.
+            val recentPool = state.recentApps
+                .ifEmpty { fallbackApps }
+                .filterNot { it.id in state.pinnedIds }
+            // Las apps ancladas ocupan sus posiciones y los huecos visibles se reparten
+            // dinámicamente entre Frecuentes y Recientes (sin duplicar ancladas ni entre sí).
             BoxWithConstraints(
                 modifier = if (wrapHeight) Modifier.fillMaxWidth() else Modifier.weight(1f).fillMaxWidth()
             ) {
@@ -2310,6 +2314,40 @@ private fun SearchPage(
                 } else 0
                 val effectiveFillSlots = maxOf(minFillSlots, measuredRows * cols)
 
+                val pinnedOccupied = remember(pinned, state.pinnedSlots) {
+                    val occupied = mutableSetOf<Int>()
+                    pinned.forEach { item ->
+                        val explicit = state.pinnedSlots[item.id]
+                        if (explicit != null && explicit >= 0 && explicit !in occupied) {
+                            occupied += explicit
+                        }
+                    }
+                    var cursor = 0
+                    repeat((pinned.size - occupied.size).coerceAtLeast(0)) {
+                        while (cursor in occupied) cursor++
+                        occupied += cursor
+                        cursor++
+                    }
+                    occupied
+                }
+                val maxPinnedEnd = (pinnedOccupied.maxOrNull() ?: -1) + 1
+                val rawEnd = maxOf(maxPinnedEnd, effectiveFillSlots)
+                val totalSlots = if (rawEnd > 0 && rawEnd % cols != 0) {
+                    ((rawEnd + cols - 1) / cols) * cols
+                } else rawEnd
+                val freeSlots = (totalSlots - pinnedOccupied.size).coerceAtLeast(0)
+                val frequentCount = (freeSlots + 1) / 2
+                val recentCount = (freeSlots - frequentCount).coerceAtLeast(0)
+
+                val pickedFrequent = frequentPool.take(frequentCount)
+                val pickedFrequentIds = pickedFrequent.map { it.id }.toSet()
+                val pickedRecent = recentPool.filterNot { it.id in pickedFrequentIds }.take(recentCount)
+                val pickedAllIds = pickedFrequentIds + pickedRecent.map { it.id }
+                val remainder = (recentPool + frequentPool + fallbackApps)
+                    .filterNot { it.id in pickedAllIds }
+                    .distinctBy { it.id }
+                val dynamicFill = pickedFrequent + pickedRecent + remainder
+
                 PanelSection(
                     "Favoritos",
                     if (wrapHeight) Modifier.fillMaxWidth() else Modifier.fillMaxSize()
@@ -2318,7 +2356,7 @@ private fun SearchPage(
                         state = state.copy(
                             sections = listOf(
                                 ResultSection("Ancladas", pinned),
-                                ResultSection("Frecuentes", frequentFill)
+                                ResultSection("Frecuentes y Recientes", dynamicFill)
                             )
                         ),
                         onItemClick = onItemClick, onCallContact = onCallContact,

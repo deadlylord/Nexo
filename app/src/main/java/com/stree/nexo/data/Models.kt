@@ -90,6 +90,7 @@ data class SearchUiState(
     val sections: List<ResultSection> = emptyList(),
     val allItems: List<SearchItem> = emptyList(),
     val frequentApps: List<SearchItem> = emptyList(),
+    val recentApps: List<SearchItem> = emptyList(),
     val loading: Boolean = true,
     val contactsPermission: Boolean = false,
     val shortcutsBlocked: Boolean = false,

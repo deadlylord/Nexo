@@ -64,6 +64,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         if (!force && currentItems.isNotEmpty() &&
             System.currentTimeMillis() - lastBuildAt < 30_000L
         ) {
+            refreshUsage()
             return
         }
         refreshing = true
@@ -174,6 +175,13 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         recompute(_state.value.query)
     }
 
+    fun refreshUsage() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { runCatching { repository.usage.importDeviceUsage() } }
+            recompute(_state.value.query)
+        }
+    }
+
     private fun recompute(query: String) {
         syncPinnedState()
         val pinnedIds = _state.value.pinnedIds
@@ -189,7 +197,8 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         val byFrequent = repository.usage.frequent(appIds, appIds.size).mapNotNull { appById[it] }
         val byRecent = repository.usage.recent(appIds, appIds.size).mapNotNull { appById[it] }
         val frequentApps = (byFrequent + byRecent + unpinnedApps).distinctBy { it.id }
-        _state.update { it.copy(sections = sections, frequentApps = frequentApps) }
+        val recentApps = (byRecent + byFrequent + unpinnedApps).distinctBy { it.id }
+        _state.update { it.copy(sections = sections, frequentApps = frequentApps, recentApps = recentApps) }
     }
 
     private fun idleSections(

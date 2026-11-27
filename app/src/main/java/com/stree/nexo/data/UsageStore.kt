@@ -13,16 +13,24 @@ class UsageStore(private val context: Context) {
     @Volatile private var externalEnabled = hasUsageAccess()
 
     fun record(id: String) {
-        // Con acceso al uso, Android aporta las aperturas de apps, evitando
-        // contarlas dos veces cuando también se abren desde Nexo.
-        if (id.startsWith("app:") && externalEnabled) return
-        val count = prefs.getInt("count_$id", 0) + 1
+        val now = System.currentTimeMillis()
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        prefs.edit()
-            .putInt("count_$id", count)
-            .putLong("time_$id", System.currentTimeMillis())
-            .putInt("hour_${hour}_$id", prefs.getInt("hour_${hour}_$id", 0) + 1)
-            .apply()
+        val editor = prefs.edit()
+        if (id.startsWith("app:") && externalEnabled) {
+            // Actualizamos al instante para que Recientes/Frecuentes cambien de inmediato;
+            // importDeviceUsage() ignora eventos <= previous (ventana de 2 s), evitando duplicados.
+            editor
+                .putInt("external_count_$id", prefs.getInt("external_count_$id", 0) + 1)
+                .putLong("external_time_$id", now)
+                .putInt("external_hour_${hour}_$id", prefs.getInt("external_hour_${hour}_$id", 0) + 1)
+        } else {
+            val count = prefs.getInt("count_$id", 0) + 1
+            editor
+                .putInt("count_$id", count)
+                .putLong("time_$id", now)
+                .putInt("hour_${hour}_$id", prefs.getInt("hour_${hour}_$id", 0) + 1)
+        }
+        editor.apply()
     }
 
     fun count(id: String): Int = if (externalEnabled && id.startsWith("app:")) {
@@ -35,43 +43,64 @@ class UsageStore(private val context: Context) {
     fun hasUsageAccess(): Boolean = context.getSystemService(AppOpsManager::class.java)
         .checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName) == AppOpsManager.MODE_ALLOWED
 
-    /** Importa eventos del sistema una sola vez; primera carga: últimos 14 días. */
+    /**
+     * Importa eventos del sistema. Cada 6 h reconstruye los contadores sobre una ventana
+     * móvil de 7 días para que Frecuentes evolucione con el uso real y no quede congelado;
+     * entre reconstrucciones importa incrementalmente desde la última marca.
+     */
     fun importDeviceUsage() {
         synchronized(importLock) {
-        externalEnabled = hasUsageAccess()
-        if (!externalEnabled) return
-        val now = System.currentTimeMillis()
-        val since = prefs.getLong("usage_watermark", now - 14L * 24 * 60 * 60 * 1000)
-            .coerceAtLeast(now - 14L * 24 * 60 * 60 * 1000)
-        val events = context.getSystemService(UsageStatsManager::class.java).queryEvents(since, now) ?: return
-        val event = UsageEvents.Event()
-        val counts = mutableMapOf<String, Int>()
-        val hours = mutableMapOf<String, Int>()
-        val times = mutableMapOf<String, Long>()
-        var lastPackage: String? = null
-        var lastTime = 0L
-        val calendar = Calendar.getInstance()
-        while (events.hasNextEvent()) {
-            events.getNextEvent(event)
+            externalEnabled = hasUsageAccess()
+            if (!externalEnabled) return
+            val now = System.currentTimeMillis()
+            val windowMs = 7L * 24 * 60 * 60 * 1000
+            val lastRebuild = prefs.getLong("usage_last_rebuild", 0L)
+            val fullRebuild = now - lastRebuild > 6L * 60 * 60 * 1000
+            val since = if (fullRebuild) {
+                now - windowMs
+            } else {
+                prefs.getLong("usage_watermark", now - windowMs).coerceAtLeast(now - windowMs)
+            }
+            val events = context.getSystemService(UsageStatsManager::class.java).queryEvents(since, now) ?: return
+            val event = UsageEvents.Event()
+            val counts = mutableMapOf<String, Int>()
+            val hours = mutableMapOf<String, Int>()
+            val times = mutableMapOf<String, Long>()
+            var lastPackage: String? = null
+            var lastTime = 0L
+            val calendar = Calendar.getInstance()
             val foreground = if (android.os.Build.VERSION.SDK_INT >= 29) UsageEvents.Event.ACTIVITY_RESUMED else 1
-            if (event.eventType != foreground || event.timeStamp < since) continue
-            val pkg = event.packageName ?: continue
-            if (pkg == context.packageName) continue
-            val id = "app:$pkg"
-            val previous = times[id] ?: prefs.getLong("external_time_$id", 0L)
-            if (event.timeStamp <= previous || (pkg == lastPackage && event.timeStamp - lastTime < 2000)) continue
-            lastPackage = pkg; lastTime = event.timeStamp
-            times[id] = event.timeStamp
-            counts[id] = (counts[id] ?: prefs.getInt("external_count_$id", 0)) + 1
-            calendar.timeInMillis = event.timeStamp
-            val key = "external_hour_${calendar.get(Calendar.HOUR_OF_DAY)}_$id"
-            hours[key] = (hours[key] ?: prefs.getInt(key, 0)) + 1
-        }
-        val editor = prefs.edit().putLong("usage_watermark", now)
-        counts.forEach { (id, value) -> editor.putInt("external_count_$id", value) }
-        times.forEach { (id, value) -> editor.putLong("external_time_$id", value) }
-        hours.forEach { (key, value) -> editor.putInt(key, value) }
-        editor.apply()
+            while (events.hasNextEvent()) {
+                events.getNextEvent(event)
+                if (event.eventType != foreground || event.timeStamp < since) continue
+                val pkg = event.packageName ?: continue
+                if (pkg == context.packageName) continue
+                val id = "app:$pkg"
+                val previous = times[id] ?: if (fullRebuild) 0L else prefs.getLong("external_time_$id", 0L)
+                if (event.timeStamp <= previous || (pkg == lastPackage && event.timeStamp - lastTime < 2000)) continue
+                lastPackage = pkg; lastTime = event.timeStamp
+                times[id] = event.timeStamp
+                counts[id] = (counts[id] ?: if (fullRebuild) 0 else prefs.getInt("external_count_$id", 0)) + 1
+                calendar.timeInMillis = event.timeStamp
+                val key = "external_hour_${calendar.get(Calendar.HOUR_OF_DAY)}_$id"
+                hours[key] = (hours[key] ?: if (fullRebuild) 0 else prefs.getInt(key, 0)) + 1
+            }
+            val editor = prefs.edit().putLong("usage_watermark", now)
+            if (fullRebuild) {
+                prefs.all.keys.forEach { key ->
+                    if (key.startsWith("external_count_") || key.startsWith("external_hour_")) {
+                        editor.remove(key)
+                    }
+                }
+                editor.putLong("usage_last_rebuild", now)
+            }
+            counts.forEach { (id, value) -> editor.putInt("external_count_$id", value) }
+            times.forEach { (id, value) ->
+                val existing = prefs.getLong("external_time_$id", 0L)
+                editor.putLong("external_time_$id", maxOf(existing, value))
+            }
+            hours.forEach { (key, value) -> editor.putInt(key, value) }
+            editor.apply()
         }
     }
 
