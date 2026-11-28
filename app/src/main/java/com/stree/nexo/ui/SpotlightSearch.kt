@@ -96,6 +96,7 @@ import com.stree.nexo.WidgetPickerActivity
 import com.stree.nexo.data.ClipboardHistoryStore
 import com.stree.nexo.data.Haptics
 import com.stree.nexo.data.ItemType
+import com.stree.nexo.data.PanelStyle
 import com.stree.nexo.data.Prefs
 import com.stree.nexo.data.SearchItem
 import com.stree.nexo.data.SearchUiState
@@ -302,20 +303,22 @@ fun SpotlightSearchContent(
                 (query.contains('.') && query.substringAfterLast('.').length in 2..6))
     }
 
-    val cardColor = if (overlayStyle) {
-        spec.surface.copy(alpha = 0.84f)
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f)
+    val isLiquidOverlay = overlayStyle && style == PanelStyle.LIQUID_GLASS
+    val cardColor = when {
+        isLiquidOverlay -> spec.surface.copy(alpha = spec.panelAlpha)
+        overlayStyle -> spec.surface.copy(alpha = 0.84f)
+        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f)
     }
-    val cardBorder = if (overlayStyle) {
-        spec.outlineVariant.copy(alpha = 0.34f)
-    } else {
-        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f)
+    val cardBorder = when {
+        isLiquidOverlay -> spec.outlineVariant.copy(alpha = 0.62f)
+        overlayStyle -> spec.outlineVariant.copy(alpha = 0.34f)
+        else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f)
     }
-    val searchPillBg = if (overlayStyle) {
-        spec.surfaceVariant.copy(alpha = 0.88f)
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f)
+    val cardBorderBrush = if (isLiquidOverlay) spec.borderBrush else null
+    val searchPillBg = when {
+        isLiquidOverlay -> spec.surface.copy(alpha = (spec.panelAlpha + 0.06f).coerceAtMost(0.42f))
+        overlayStyle -> spec.surfaceVariant.copy(alpha = 0.88f)
+        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f)
     }
     val primaryTextColor = if (overlayStyle) spec.onSurface else MaterialTheme.colorScheme.onSurface
     val mutedTextColor = if (overlayStyle) spec.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant
@@ -472,8 +475,8 @@ fun SpotlightSearchContent(
                 shape = RoundedCornerShape(22.dp),
                 color = searchPillBg,
                 border = BorderStroke(
-                    width = 1.dp,
-                    brush = Brush.linearGradient(
+                    width = if (isLiquidOverlay) spec.borderWidthDp.dp else 1.dp,
+                    brush = cardBorderBrush ?: Brush.linearGradient(
                         listOf(
                             spec.primary.copy(alpha = 0.45f),
                             cardBorder
@@ -668,6 +671,7 @@ fun SpotlightSearchContent(
                             title = "Sugerencias",
                             cardColor = cardColor,
                             cardBorder = cardBorder,
+                            cardBorderBrush = cardBorderBrush,
                             headerColor = mutedTextColor
                         ) {
                             Column(
@@ -836,7 +840,11 @@ fun SpotlightSearchContent(
                                         .padding(horizontal = 16.dp),
                                     shape = RoundedCornerShape(20.dp),
                                     color = cardColor,
-                                    border = BorderStroke(0.8.dp, cardBorder)
+                                    border = if (cardBorderBrush != null) {
+                                        BorderStroke(spec.borderWidthDp.dp, cardBorderBrush)
+                                    } else {
+                                        BorderStroke(0.8.dp, cardBorder)
+                                    }
                                 ) {
                                     Row(
                                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
@@ -928,6 +936,7 @@ fun SpotlightSearchContent(
                             title = "Cálculo",
                             cardColor = cardColor,
                             cardBorder = cardBorder,
+                            cardBorderBrush = cardBorderBrush,
                             headerColor = mutedTextColor
                         ) {
                             Row(
@@ -981,6 +990,7 @@ fun SpotlightSearchContent(
                             title = "Resultado principal",
                             cardColor = cardColor,
                             cardBorder = cardBorder,
+                            cardBorderBrush = cardBorderBrush,
                             headerColor = mutedTextColor
                         ) {
                             SpotlightResultRow(
@@ -1026,6 +1036,7 @@ fun SpotlightSearchContent(
                                 title = section.title,
                                 cardColor = cardColor,
                                 cardBorder = cardBorder,
+                                cardBorderBrush = cardBorderBrush,
                                 headerColor = mutedTextColor
                             ) {
                                 Column {
@@ -1097,6 +1108,7 @@ fun SpotlightSearchContent(
                         title = "Web",
                         cardColor = cardColor,
                         cardBorder = cardBorder,
+                        cardBorderBrush = cardBorderBrush,
                         headerColor = mutedTextColor
                     ) {
                         Column {
@@ -1285,6 +1297,7 @@ private fun SpotlightCard(
     cardBorder: Color,
     headerColor: Color,
     modifier: Modifier = Modifier,
+    cardBorderBrush: Brush? = null,
     content: @Composable () -> Unit
 ) {
     Column(
@@ -1303,7 +1316,11 @@ private fun SpotlightCard(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(20.dp),
             color = cardColor,
-            border = BorderStroke(0.8.dp, cardBorder)
+            border = if (cardBorderBrush != null) {
+                BorderStroke(1.2.dp, cardBorderBrush)
+            } else {
+                BorderStroke(0.8.dp, cardBorder)
+            }
         ) {
             content()
         }

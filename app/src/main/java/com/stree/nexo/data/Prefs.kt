@@ -638,6 +638,76 @@ object Prefs {
         savePinnedPlaylists(context, updated)
         return updated
     }
+
+    fun iconPackPackage(context: Context): String? =
+        prefs(context).getString("icon_pack_package", null)?.takeIf { it.isNotBlank() }
+
+    fun setIconPackPackage(context: Context, packageName: String?) {
+        prefs(context).edit().putString("icon_pack_package", packageName?.takeIf { it.isNotBlank() }).apply()
+        IconPackManager.clearCache()
+    }
+
+    fun dynamicIslandUseTheme(context: Context): Boolean =
+        prefs(context).getBoolean("dynamic_island_use_theme", true)
+
+    fun setDynamicIslandUseTheme(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("dynamic_island_use_theme", enabled).apply()
+        themeRevision++
+    }
+
+    fun dynamicIslandLyricsEnabled(context: Context): Boolean =
+        prefs(context).getBoolean("dynamic_island_lyrics_enabled", true)
+
+    fun setDynamicIslandLyricsEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("dynamic_island_lyrics_enabled", enabled).apply()
+    }
+
+    fun recentArtistMixes(context: Context): List<RecentArtistMix> = runCatching {
+        val raw = prefs(context).getString("recent_artist_mixes", "[]").orEmpty()
+        val array = JSONArray(raw)
+        buildList {
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i) ?: continue
+                val id = obj.optString("id").trim()
+                val artist = obj.optString("artist").trim()
+                val title = obj.optString("title").trim()
+                val packageName = obj.optString("packageName").trim()
+                val artPath = obj.optString("artPath").trim().takeIf { it.isNotEmpty() }
+                if (id.isNotEmpty() && artist.isNotEmpty()) {
+                    add(
+                        RecentArtistMix(
+                            id = id,
+                            artist = artist,
+                            title = title.ifBlank { artist },
+                            packageName = packageName,
+                            artPath = artPath
+                        )
+                    )
+                }
+            }
+        }
+    }.getOrDefault(emptyList())
+
+    fun recordRecentArtistMix(context: Context, mix: RecentArtistMix) {
+        if (mix.artist.isBlank()) return
+        val existing = recentArtistMixes(context).filterNot {
+            it.id == mix.id || it.artist.equals(mix.artist, ignoreCase = true)
+        }
+        val updated = (listOf(mix) + existing).take(8)
+        val array = JSONArray()
+        updated.forEach { item ->
+            array.put(
+                JSONObject().apply {
+                    put("id", item.id)
+                    put("artist", item.artist)
+                    put("title", item.title)
+                    put("packageName", item.packageName)
+                    if (!item.artPath.isNullOrBlank()) put("artPath", item.artPath)
+                }
+            )
+        }
+        prefs(context).edit().putString("recent_artist_mixes", array.toString()).apply()
+    }
 }
 
 data class PinnedPlaylist(
@@ -647,3 +717,10 @@ data class PinnedPlaylist(
     val artPath: String? = null
 )
 
+data class RecentArtistMix(
+    val id: String,
+    val artist: String,
+    val title: String,
+    val packageName: String,
+    val artPath: String? = null
+)

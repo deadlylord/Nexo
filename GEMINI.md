@@ -19,15 +19,18 @@ El agente principal actúa como **Arquitecto / Orquestador**. Usa umbrales claro
 
 ## 2. Modelos Autorizados por Rol (Autorización Explícita del Usuario)
 
-El usuario autoriza explícitamente seleccionar estos niveles de modelo al invocar subagentes con `invoke_subagent`:
+El usuario autoriza explícitamente seleccionar estos niveles de modelo al invocar subagentes con `invoke_subagent`. Referencia de equivalencias:
+- **Argón / Carbón** (`pro` / `inherit`): modelos de razonamiento profundo, arquitectura y lógica delicada de sistema Android.
+- **Neón** (`flash`): modelo rápido y equilibrado para exploración, UI Compose y wiring mecánico.
+- **Hidrógeno** (`flash_lite`): modelo ultraligero para búsquedas simples, compilación y revisión rápida de logs.
 
 | Rol | Subagente / Skill | Modelo autorizado | Uso |
 |-----|-------------------|-------------------|-----|
-| **Orquestador / Arquitecto** | Hilo principal | `pro` (modelo principal) | Decisiones de diseño, planificación, revisión final y fixes pequeños. |
-| **Explorador** | `research` (`explore-codebase`) | `flash` (o `flash_lite` en búsquedas simples) | Lectura de múltiples archivos, búsqueda de símbolos y mapeo de dependencias. |
-| **Implementador (UI / mecánico)** | `implementer` (`code-implementer`) | `flash` | Implementación de planes bien detallados en UI Compose, prefs, wiring y refactors directos. |
-| **Implementador (sistema Android)** | `implementer` (`code-implementer`) | `pro` (`inherit`) | Lógica delicada: `WindowManager`, `AccessibilityService`, Canvas, gestos táctiles, concurrencia o ciclo de vida. |
-| **Verificador (opcional)** | subagente con comandos | `flash_lite` o `flash` | Ejecutar compilación Gradle y revisar logs de CI si el output es extenso. |
+| **Orquestador / Arquitecto** | Hilo principal | **Argón / Carbón** (`pro`) | Decisiones de diseño, planificación, revisión final y fixes pequeños. |
+| **Explorador** | `research` (`explore-codebase`) | **Neón** (`flash`) o **Hidrógeno** (`flash_lite`) | Lectura de múltiples archivos, búsqueda de símbolos y mapeo de dependencias. |
+| **Implementador (UI / mecánico)** | `implementer` (`code-implementer`) | **Neón** (`flash`) | Implementación de planes bien detallados en UI Compose, prefs, wiring y refactors directos. |
+| **Implementador (sistema Android)** | `implementer` (`code-implementer`) | **Argón / Carbón** (`pro` / `inherit`) | Lógica delicada: `WindowManager`, `AccessibilityService`, Canvas, gestos táctiles, concurrencia o ciclo de vida. |
+| **Verificador (opcional)** | subagente con comandos | **Hidrógeno** (`flash_lite`) o **Neón** (`flash`) | Ejecutar compilación Gradle y revisar logs de CI si el output es extenso. |
 
 ## 3. Mapa Compacto de Arquitectura de Nexo
 

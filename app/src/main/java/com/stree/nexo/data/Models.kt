@@ -23,6 +23,7 @@ enum class PanelPage(val label: String) {
 enum class PanelStyle(val label: String, val subtitle: String) {
     NEXO("Nexo", "Índigo cósmico y destellos iridiscentes"),
     GLASS("Cristal", "Vidrio esmerilado oscuro con bisel especular"),
+    LIQUID_GLASS("Cristal líquido", "Vidrio claro y transparente con reflejos líquidos"),
     MINT("Aurora", "Esmeralda nocturno y turquesa boreal"),
     OCEAN("Océano", "Abismo zafiro con reflejos celestes"),
     AMBER("Ámbar", "Obsidiana cálida con bronce y oro"),

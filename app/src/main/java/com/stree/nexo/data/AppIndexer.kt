@@ -30,13 +30,20 @@ class AppIndexer(private val context: Context) {
                 launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
                 val label = resolveInfo.loadLabel(packageManager).toString()
+                val defaultIcon = runCatching { resolveInfo.loadIcon(packageManager) }.getOrNull()
+                val resolvedIcon = IconPackManager.resolveIcon(
+                    context = context,
+                    packageName = packageName,
+                    activityName = resolveInfo.activityInfo.name,
+                    fallback = defaultIcon
+                )
                 SearchItem(
                     id = "app:$packageName",
                     title = label,
                     subtitle = "Aplicación",
                     type = ItemType.APP,
                     keywords = "$label $packageName",
-                    icon = runCatching { resolveInfo.loadIcon(packageManager) }.getOrNull(),
+                    icon = resolvedIcon,
                     intent = launchIntent,
                     packageName = packageName
                 )

@@ -59,9 +59,11 @@ import com.stree.nexo.data.NotificationPulse
 import com.stree.nexo.data.PanelSide
 import com.stree.nexo.data.Prefs
 import com.stree.nexo.data.PreviousAppTarget
+import com.stree.nexo.data.RecentArtistMix
 import com.stree.nexo.data.UsageStore
 import com.stree.nexo.floating.FloatingAppBubbleController
 import com.stree.nexo.floating.FloatingWindowRegistry
+import com.stree.nexo.media.IslandShortcutItem
 import com.stree.nexo.media.LyricsTrack
 import com.stree.nexo.media.MediaControlService
 import com.stree.nexo.media.PlaylistMetadata
@@ -80,6 +82,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONException
+import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.util.Locale
 import kotlin.math.abs
@@ -109,14 +113,22 @@ class EdgePanelService : Service() {
     private var currentPlayback: NowPlaying? = null
     private var currentPlaybackIcon: Bitmap? = null
     private var currentPlaybackPkg: String? = null
+    private var currentPlayerShortcuts: List<IslandShortcutItem> = emptyList()
     private var currentCall: CallPulse? = null
     private var playbackJob: Job? = null
     private var lyricsJob: Job? = null
     private var playlistArtJob: Job? = null
+    private var recentMixJob: Job? = null
+    private var lastRecordedMixKey: String? = null
     private var lyricsTrack: LyricsTrack? = null
+    private var lyricsTrackKey: String? = null
     private var songLyrics: SongLyrics? = null
     private var lyricsStatus = ""
     private var lyricsPage = 0
+    private var lyricsUserHiddenForKey: String? = null
+    private val lyricsCache = object : LinkedHashMap<String, SongLyrics>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, SongLyrics>?): Boolean = size > 6
+    }
 
     // Cronómetro integrado en la Isla Dinámica
     private var stopwatchRunning = false
@@ -358,7 +370,7 @@ class EdgePanelService : Service() {
     }
 
     private val mediaPauseHideRunnable = Runnable {
-        if (currentPlayback?.playing != true && lyricsTrack == null) {
+        if (currentPlayback?.playing != true && !(islandMediaExpanded && isLyricsCurrentlyOpen())) {
             wasMediaActivelyPlaying = false
             mediaHiddenWhilePaused = true
             islandMediaExpanded = false
@@ -383,7 +395,7 @@ class EdgePanelService : Service() {
                     refreshIslandIdleState()
                 }
                 val interval = when {
-                    mode == IslandMode.EXPANDED_MEDIA && lyricsTrack != null && currentPlayback?.playing == true -> 200L
+                    mode == IslandMode.EXPANDED_MEDIA && isLyricsCurrentlyOpen() && currentPlayback?.playing == true -> 200L
                     mode == IslandMode.EXPANDED_MEDIA -> 500L
                     else -> 1_000L
                 }
@@ -604,21 +616,43 @@ class EdgePanelService : Service() {
         playbackJob?.cancel()
         playbackJob = gestureScope.launch {
             MediaControlService.playback.collectLatest { playing ->
-                if (lyricsTrack != null && lyricsTrack != playing?.lyricsTrack()) {
-                    clearLyrics()
-                    if (islandMediaExpanded) scheduleExpandAutoCollapse(8_000L)
-                }
                 currentPlayback = playing
                 val pkg = playing?.packageName?.takeIf { it.isNotBlank() }
                 if (pkg != currentPlaybackPkg) {
                     currentPlaybackPkg = pkg
-                    currentPlaybackIcon = if (pkg != null) {
-                        withContext(Dispatchers.IO) {
-                            runCatching {
+                    if (pkg != null) {
+                        val (iconBmp, shortcuts) = withContext(Dispatchers.IO) {
+                            val ico = runCatching {
                                 packageManager.getApplicationIcon(pkg).toBitmap(72, 72)
                             }.getOrNull()
+                            val sc = MediaControlService.loadPlayerShortcuts(applicationContext, pkg)
+                            ico to sc
                         }
-                    } else null
+                        currentPlaybackIcon = iconBmp
+                        currentPlayerShortcuts = shortcuts
+                    } else {
+                        currentPlaybackIcon = null
+                        currentPlayerShortcuts = emptyList()
+                    }
+                }
+
+                // Pre-carga automática de letras en segundo plano sin perderlas al colapsar la isla
+                val track = playing?.lyricsTrack()
+                if (track != null && Prefs.dynamicIslandLyricsEnabled(this@EdgePanelService)) {
+                    prefetchLyricsIfNeeded(track)
+                } else if (playing == null) {
+                    lyricsJob?.cancel()
+                    lyricsJob = null
+                    lyricsTrack = null
+                    lyricsTrackKey = null
+                    songLyrics = null
+                    lyricsStatus = ""
+                    lyricsPage = 0
+                }
+
+                // Auto-aprender mixes recientes con carátula real del artista
+                if (playing != null && playing.albumArt != null && playing.artist.isNotBlank()) {
+                    recordRecentArtistMixAsync(playing)
                 }
 
                 when {
@@ -736,17 +770,31 @@ class EdgePanelService : Service() {
                     runCatching { now.controller.transportControls.seekTo(targetMs) }
                     scheduleExpandAutoCollapse(8_000L)
                 }
-                override fun onMediaSeekBy(deltaMs: Long) {
-                    val now = currentPlayback ?: return
+                override fun onMediaShuffle() {
                     Haptics.perform(this@EdgePanelService)
-                    val currentPos = computeCurrentPlaybackPositionMs(now)
-                    val targetMs = if (now.durationMs > 0L) {
-                        (currentPos + deltaMs).coerceIn(0L, now.durationMs)
+                    if (MediaControlService.toggleShuffle()) {
+                        scheduleExpandAutoCollapse(8_000L)
                     } else {
-                        (currentPos + deltaMs).coerceAtLeast(0L)
+                        val now = currentPlayback
+                        collapseIslandExpansion()
+                        MediaControlService.playArtistRadio(
+                            this@EdgePanelService,
+                            now?.artist,
+                            now?.title,
+                            now?.packageName
+                        )
                     }
-                    runCatching { now.controller.transportControls.seekTo(targetMs) }
-                    scheduleExpandAutoCollapse(8_000L)
+                }
+                override fun onMediaArtistRadio() {
+                    Haptics.perform(this@EdgePanelService)
+                    val now = currentPlayback
+                    collapseIslandExpansion()
+                    MediaControlService.playArtistRadio(
+                        this@EdgePanelService,
+                        now?.artist,
+                        now?.title,
+                        now?.packageName
+                    )
                 }
                 override fun onMediaLyrics() = toggleLyrics()
                 override fun onMediaLyricsPage(delta: Int) {
@@ -779,12 +827,35 @@ class EdgePanelService : Service() {
                 override fun onPlaylistCardTap(card: IslandPlaylistCard) {
                     Haptics.perform(this@EdgePanelService)
                     val qId = card.queueId
-                    if (qId != null) {
-                        MediaControlService.skipToQueueItem(qId)
-                        scheduleExpandAutoCollapse(8_000L)
-                    } else if (!card.url.isNullOrBlank()) {
-                        collapseIslandExpansion()
-                        PlaylistMetadata.openPlaylist(this@EdgePanelService, card.url)
+                    when {
+                        qId != null -> {
+                            MediaControlService.skipToQueueItem(qId)
+                            scheduleExpandAutoCollapse(8_000L)
+                        }
+                        !card.shortcutPackage.isNullOrBlank() && !card.shortcutId.isNullOrBlank() -> {
+                            collapseIslandExpansion()
+                            if (!MediaControlService.launchPlayerShortcut(
+                                    this@EdgePanelService,
+                                    card.shortcutPackage,
+                                    card.shortcutId
+                                )
+                            ) {
+                                MediaControlService.openPlayingApp(this@EdgePanelService)
+                            }
+                        }
+                        !card.url.isNullOrBlank() -> {
+                            collapseIslandExpansion()
+                            PlaylistMetadata.openPlaylist(this@EdgePanelService, card.url)
+                        }
+                        !card.artistQuery.isNullOrBlank() -> {
+                            collapseIslandExpansion()
+                            MediaControlService.playArtistRadio(
+                                this@EdgePanelService,
+                                card.artistQuery,
+                                null,
+                                card.packageName ?: currentPlayback?.packageName
+                            )
+                        }
                     }
                 }
                 override fun onPlaylistAddTap() {
@@ -1179,7 +1250,7 @@ class EdgePanelService : Service() {
     }
 
     private fun scheduleExpandAutoCollapse(delayMs: Long) {
-        if (islandMediaExpanded && lyricsTrack != null) return
+        if (islandMediaExpanded && isLyricsCurrentlyOpen()) return
         gestureHandler.removeCallbacks(islandExpandTimeoutRunnable)
         gestureHandler.postDelayed(islandExpandTimeoutRunnable, delayMs)
     }
@@ -1264,7 +1335,6 @@ class EdgePanelService : Service() {
         val view = islandView ?: return
         val params = islandParams ?: return
         if (displayState.mode == IslandMode.HIDDEN || !canShowIsland()) {
-            clearLyrics()
             view.hideImmediate()
             view.visibility = View.GONE
             gestureHandler.removeCallbacks(islandLiveTickRunnable)
@@ -1276,8 +1346,6 @@ class EdgePanelService : Service() {
         } else {
             displayState
         }
-
-        if (finalState.mode != IslandMode.EXPANDED_MEDIA || finalState.calibrationGuide) clearLyrics()
         val targetW = dp(
             view.desiredWidthDp(
                 targetMode = finalState.mode,
@@ -1373,21 +1441,80 @@ class EdgePanelService : Service() {
         return LyricsTrack(song, performer, durationMs)
     }
 
+    private fun LyricsTrack.cacheKey(): String =
+        "${title.lowercase()}|${artist.lowercase()}|${durationMs / 1_000L}"
+
+    private fun isLyricsCurrentlyOpen(): Boolean {
+        if (!islandMediaExpanded || calibrationMode != IslandCalibrationMode.OFF) return false
+        val track = currentPlayback?.lyricsTrack() ?: return false
+        val key = track.cacheKey()
+        if (!Prefs.dynamicIslandLyricsEnabled(this)) {
+            return lyricsTrackKey == key && lyricsUserHiddenForKey != key
+        }
+        return lyricsUserHiddenForKey != key
+    }
+
     private fun clearLyrics() {
         lyricsJob?.cancel()
         lyricsJob = null
         lyricsTrack = null
+        lyricsTrackKey = null
         songLyrics = null
         lyricsStatus = ""
         lyricsPage = 0
+        lyricsUserHiddenForKey = null
+    }
+
+    private fun prefetchLyricsIfNeeded(track: LyricsTrack) {
+        val key = track.cacheKey()
+        if (lyricsTrackKey == key && (songLyrics != null || lyricsJob?.isActive == true)) return
+        lyricsJob?.cancel()
+        lyricsTrack = track
+        lyricsTrackKey = key
+        lyricsPage = 0
+        val cached = lyricsCache[key]
+        if (cached != null) {
+            songLyrics = cached
+            lyricsStatus = ""
+            if (islandMediaExpanded) refreshIslandIdleState()
+            return
+        }
+        songLyrics = null
+        lyricsStatus = "Buscando en LRCLIB…"
+        lyricsJob = gestureScope.launch {
+            val fetched = try {
+                val res = fetchLyrics(track)
+                if (res != null) {
+                    lyricsCache[key] = res
+                    if (lyricsTrackKey == key) {
+                        songLyrics = res
+                        lyricsStatus = ""
+                    }
+                } else if (lyricsTrackKey == key) {
+                    songLyrics = null
+                    lyricsStatus = "Letra no disponible"
+                }
+                true
+            } catch (_: IOException) {
+                if (lyricsTrackKey == key) lyricsStatus = "No se pudo conectar con LRCLIB"
+                false
+            } catch (_: JSONException) {
+                if (lyricsTrackKey == key) lyricsStatus = "No se pudo leer la letra"
+                false
+            }
+            if (fetched || lyricsTrackKey == key) {
+                if (islandMediaExpanded) refreshIslandIdleState()
+            }
+        }
     }
 
     private fun toggleLyrics() {
         if (!islandMediaExpanded || calibrationMode != IslandCalibrationMode.OFF) return
         val track = currentPlayback?.lyricsTrack() ?: return
+        val key = track.cacheKey()
         Haptics.perform(this)
-        if (lyricsTrack != null) {
-            clearLyrics()
+        if (isLyricsCurrentlyOpen()) {
+            lyricsUserHiddenForKey = key
             scheduleExpandAutoCollapse(8_000L)
             if (currentPlayback?.playing != true) {
                 gestureHandler.postDelayed(mediaPauseHideRunnable, 2_400L)
@@ -1395,20 +1522,51 @@ class EdgePanelService : Service() {
             refreshIslandIdleState()
             return
         }
+        lyricsUserHiddenForKey = null
         gestureHandler.removeCallbacks(islandExpandTimeoutRunnable)
-        lyricsTrack = track
-        lyricsStatus = "Buscando en LRCLIB…"
+        prefetchLyricsIfNeeded(track)
         refreshIslandIdleState()
-        lyricsJob = gestureScope.launch {
-            lyricsStatus = try {
-                songLyrics = fetchLyrics(track)
-                if (songLyrics == null) "Letra no disponible" else ""
-            } catch (_: IOException) {
-                "No se pudo conectar con LRCLIB"
-            } catch (_: JSONException) {
-                "No se pudo leer la letra"
+    }
+
+    private fun recordRecentArtistMixAsync(playing: NowPlaying) {
+        val artist = playing.artist.trim()
+        val art = playing.albumArt ?: return
+        if (artist.isEmpty() || art.isRecycled) return
+        val mixId = artist.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9]+"), "_").trim('_').take(32)
+            .ifBlank { artist.hashCode().toString() }
+        val key = "$mixId|${playing.title}"
+        if (key == lastRecordedMixKey) return
+        lastRecordedMixKey = key
+        val artCopy = runCatching {
+            if (art.width > 128 || art.height > 128) {
+                Bitmap.createScaledBitmap(art, 120, 120, true)
+            } else {
+                art.copy(art.config ?: Bitmap.Config.ARGB_8888, false)
             }
-            refreshIslandIdleState()
+        }.getOrNull() ?: return
+        recentMixJob?.cancel()
+        recentMixJob = gestureScope.launch(Dispatchers.IO) {
+            val artPath = runCatching {
+                val dir = File(filesDir, "recent_mix_art").apply { mkdirs() }
+                val file = File(dir, "$mixId.jpg")
+                FileOutputStream(file).use { out ->
+                    artCopy.compress(Bitmap.CompressFormat.JPEG, 86, out)
+                }
+                file.absolutePath
+            }.getOrNull()
+            Prefs.recordRecentArtistMix(
+                applicationContext,
+                RecentArtistMix(
+                    id = mixId,
+                    artist = artist,
+                    title = playing.title.ifBlank { artist },
+                    packageName = playing.packageName,
+                    artPath = artPath
+                )
+            )
+            if (!artPath.isNullOrBlank()) {
+                PlaylistMetadata.loadPlaylistArt(artPath)
+            }
         }
     }
 
@@ -1421,10 +1579,17 @@ class EdgePanelService : Service() {
         val clampedPos = if (duration > 0L) currentPos.coerceAtMost(duration) else currentPos
         val fraction = if (duration > 0L) (clampedPos.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f
         val track = if (expanded && calibrationMode == IslandCalibrationMode.OFF) playing.lyricsTrack() else null
-        val lyricsOpen = track != null && track == lyricsTrack
-        val lyrics = songLyrics.takeIf { lyricsOpen }
-        val timed = lyrics?.timed?.takeIf { lines -> lines.any { it.text.isNotBlank() } }
-        val plain = lyrics?.plain?.takeIf { timed == null }
+        val trackKey = track?.cacheKey()
+        val lyricsOpen = track != null && trackKey != null && lyricsUserHiddenForKey != trackKey &&
+            (Prefs.dynamicIslandLyricsEnabled(this) || lyricsTrackKey == trackKey)
+        if (lyricsOpen && track != null && lyricsTrackKey != trackKey) {
+            prefetchLyricsIfNeeded(track)
+        }
+        val activeLyrics = if (lyricsOpen && trackKey != null) {
+            lyricsCache[trackKey] ?: songLyrics.takeIf { lyricsTrackKey == trackKey }
+        } else null
+        val timed = activeLyrics?.timed?.takeIf { lines -> lines.any { it.text.isNotBlank() } }
+        val plain = activeLyrics?.plain?.takeIf { timed == null }
         val lookup = timed?.binarySearchBy(clampedPos) { it.positionMs } ?: -1
         val activeLine = if (lookup >= 0) lookup else -lookup - 2
 
@@ -1449,37 +1614,71 @@ class EdgePanelService : Service() {
         val showPlaylists = expanded && calibrationMode == IslandCalibrationMode.OFF && Prefs.dynamicIslandShowPlaylists(this)
         val playlistCards: List<IslandPlaylistCard> = if (showPlaylists) {
             val pinned = Prefs.pinnedPlaylists(this)
-            if (pinned.isNotEmpty()) {
-                val missingArtPaths = pinned.mapNotNull { item ->
-                    item.artPath?.takeIf { PlaylistMetadata.getCachedPlaylistArt(it) == null }
-                }
-                if (missingArtPaths.isNotEmpty() && playlistArtJob?.isActive != true) {
-                    playlistArtJob = gestureScope.launch {
-                        PlaylistMetadata.preloadPlaylistArt(missingArtPaths)
-                        if (islandMediaExpanded) refreshIslandIdleState()
+            val recentMixes = Prefs.recentArtistMixes(this)
+            when {
+                pinned.isNotEmpty() -> {
+                    val missingArtPaths = pinned.mapNotNull { item ->
+                        item.artPath?.takeIf { PlaylistMetadata.getCachedPlaylistArt(it) == null }
+                    }
+                    if (missingArtPaths.isNotEmpty() && playlistArtJob?.isActive != true) {
+                        playlistArtJob = gestureScope.launch {
+                            PlaylistMetadata.preloadPlaylistArt(missingArtPaths)
+                            if (islandMediaExpanded) refreshIslandIdleState()
+                        }
+                    }
+                    pinned.map { item ->
+                        IslandPlaylistCard(
+                            id = item.id,
+                            title = item.title,
+                            art = PlaylistMetadata.getCachedPlaylistArt(item.artPath),
+                            url = item.url,
+                            queueId = null
+                        )
                     }
                 }
-                pinned.map { item ->
-                    IslandPlaylistCard(
-                        id = item.id,
-                        title = item.title,
-                        art = PlaylistMetadata.getCachedPlaylistArt(item.artPath),
-                        url = item.url,
-                        queueId = null
-                    )
+                currentPlayerShortcuts.isNotEmpty() -> {
+                    currentPlayerShortcuts.map { sc ->
+                        IslandPlaylistCard(
+                            id = sc.id,
+                            title = sc.label,
+                            art = sc.icon,
+                            shortcutPackage = sc.packageName,
+                            shortcutId = sc.shortcutId
+                        )
+                    }
                 }
-            } else if (playing.queue.isNotEmpty()) {
-                playing.queue.map { q ->
-                    IslandPlaylistCard(
-                        id = "q_${q.queueId}",
-                        title = q.title,
-                        art = q.art,
-                        url = null,
-                        queueId = q.queueId
-                    )
+                playing.queue.isNotEmpty() -> {
+                    playing.queue.map { q ->
+                        IslandPlaylistCard(
+                            id = "q_${q.queueId}",
+                            title = q.title,
+                            art = q.art,
+                            url = null,
+                            queueId = q.queueId
+                        )
+                    }
                 }
-            } else {
-                emptyList()
+                recentMixes.isNotEmpty() -> {
+                    val missingArtPaths = recentMixes.mapNotNull { mix ->
+                        mix.artPath?.takeIf { PlaylistMetadata.getCachedPlaylistArt(it) == null }
+                    }
+                    if (missingArtPaths.isNotEmpty() && playlistArtJob?.isActive != true) {
+                        playlistArtJob = gestureScope.launch {
+                            PlaylistMetadata.preloadPlaylistArt(missingArtPaths)
+                            if (islandMediaExpanded) refreshIslandIdleState()
+                        }
+                    }
+                    recentMixes.map { mix ->
+                        IslandPlaylistCard(
+                            id = "mix_${mix.id}",
+                            title = mix.artist,
+                            art = PlaylistMetadata.getCachedPlaylistArt(mix.artPath),
+                            artistQuery = mix.artist,
+                            packageName = mix.packageName.ifBlank { playing.packageName }
+                        )
+                    }
+                }
+                else -> emptyList()
             }
         } else {
             emptyList()
@@ -1493,6 +1692,7 @@ class EdgePanelService : Service() {
             accentColor = palette?.first,
             secondaryAccentColor = palette?.second,
             playing = playing.playing,
+            shuffleActive = playing.isShuffleActive,
             progressFraction = fraction,
             progressLeftText = if (duration > 0L) formatMmSs(clampedPos) else "",
             progressRightText = if (duration > 0L) formatMmSs(duration) else "",

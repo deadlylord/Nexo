@@ -87,26 +87,19 @@ internal fun ControlPanelPage(
     val iconBrush = remember(themeSpec) { themeSpec.actionIconBrush }
 
     when (mode) {
-        "brightness" -> {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.Center
-            ) {
-                BrightnessSlider(revision = revision, iconBrush = iconBrush)
-            }
-        }
-
-        "volume" -> {
+        "display_audio", "brightness", "volume" -> {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                BrightnessSlider(revision = revision, iconBrush = iconBrush)
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 2.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                )
                 VolumeSlider(
                     icon = Icons.Filled.MusicNote,
                     contentDescription = "Multimedia",

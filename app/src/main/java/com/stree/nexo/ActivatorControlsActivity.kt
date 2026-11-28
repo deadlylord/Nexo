@@ -1,7 +1,9 @@
 package com.stree.nexo
 
 import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -18,11 +20,12 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
-import androidx.compose.material.icons.filled.Brightness6
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,9 +37,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.stree.nexo.data.Haptics
 import com.stree.nexo.data.PanelSide
+import com.stree.nexo.data.PanelStyle
 import com.stree.nexo.data.Prefs
 import com.stree.nexo.panel.EdgePanelService
 import com.stree.nexo.ui.ControlPanelPage
@@ -59,6 +64,12 @@ class ActivatorControlsActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         disableSystemTransitions()
         window.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
+        if (Prefs.panelStyle(this) == PanelStyle.LIQUID_GLASS && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            runCatching {
+                window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+                window.attributes = window.attributes.apply { blurBehindRadius = 36 }
+            }
+        }
         val mode = intent.getStringExtra("control") ?: "actions"
         val side = Prefs.panelSide(this)
         setContent {
@@ -70,11 +81,15 @@ class ActivatorControlsActivity : ComponentActivity() {
 
                 PanelTheme(style) {
                     val modes = remember(mode) {
-                        if (mode == "lastapp") listOf("lastapp") else listOf("brightness", "volume", "actions")
+                        if (mode == "lastapp") listOf("lastapp") else listOf("display_audio", "actions")
                     }
                     val infiniteScroll = remember(modes) { Prefs.panelInfiniteScroll(this) && modes.size > 1 }
                     val pagerCount = if (infiniteScroll) modes.size * 1000 else modes.size
-                    val startIndex = modes.indexOf(mode).coerceAtLeast(0)
+                    val startIndex = when {
+                        modes.size == 1 -> 0
+                        mode == "actions" -> 1
+                        else -> 0
+                    }
                     val initialPagerPage = if (infiniteScroll) modes.size * 500 + startIndex else startIndex
                     val pager = rememberPagerState(initialPage = initialPagerPage, pageCount = { pagerCount })
                     fun realIndex(virtualPage: Int): Int = ((virtualPage % modes.size) + modes.size) % modes.size
@@ -159,8 +174,7 @@ class ActivatorControlsActivity : ComponentActivity() {
                                 val activeRealPage = realIndex(pager.currentPage)
                                 val tabItems = remember {
                                     listOf(
-                                        Icons.Filled.Brightness6 to "Brillo",
-                                        Icons.AutoMirrored.Filled.VolumeUp to "Audio",
+                                        Icons.Filled.Tune to "Brillo y sonido",
                                         Icons.AutoMirrored.Filled.VolumeOff to "Silencio y asistente"
                                     )
                                 }
@@ -174,6 +188,12 @@ class ActivatorControlsActivity : ComponentActivity() {
                                         .width(panelWidth)
                                         .height(panelHeight + 8.dp)
                                 ) { page ->
+                                    val pageMode = modes[realIndex(page)]
+                                    val pageTitle = when (pageMode) {
+                                        "display_audio" -> "Brillo y sonido"
+                                        "actions" -> "Silencio y asistente"
+                                        else -> null
+                                    }
                                     Box(
                                         modifier = Modifier
                                             .fillMaxSize()
@@ -189,9 +209,18 @@ class ActivatorControlsActivity : ComponentActivity() {
                                                     onClick = {}
                                                 )
                                         ) {
+                                            if (pageTitle != null) {
+                                                Text(
+                                                    text = pageTitle,
+                                                    style = MaterialTheme.typography.labelLarge,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = themeSpec.onSurface,
+                                                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 2.dp)
+                                                )
+                                            }
                                             Box(Modifier.weight(1f).fillMaxWidth()) {
                                                 ControlPanelPage(
-                                                    mode = modes[realIndex(page)],
+                                                    mode = pageMode,
                                                     onDismiss = dismiss
                                                 )
                                             }

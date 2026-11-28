@@ -128,7 +128,7 @@ class MainActivity : ComponentActivity() {
                     onRequestBatteryExemption = ::requestBatteryExemption,
                     onOpenHomeSettings = ::openHomeSettings,
                     onRefresh = {
-                        viewModel.refresh()
+                        viewModel.refresh(force = true)
                         Toast.makeText(this, "Actualizando índice…", Toast.LENGTH_SHORT).show()
                     }
                 )

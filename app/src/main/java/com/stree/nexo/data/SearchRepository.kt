@@ -15,6 +15,10 @@ data class IndexResult(
 class SearchRepository(context: Context) {
     companion object {
         @Volatile private var cachedBase: IndexResult? = null
+
+        fun invalidateCache() {
+            cachedBase = null
+        }
     }
 
     private val appContext = context.applicationContext

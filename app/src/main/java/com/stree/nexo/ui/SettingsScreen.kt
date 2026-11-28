@@ -128,15 +128,19 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.core.graphics.drawable.toBitmap
 import com.stree.nexo.data.ActivatorStyle
 import com.stree.nexo.data.EdgeGesture
 import com.stree.nexo.data.EdgeGestureAction
 import com.stree.nexo.data.Haptics
+import com.stree.nexo.data.IconPackInfo
+import com.stree.nexo.data.IconPackManager
 import com.stree.nexo.data.PanelPage
 import com.stree.nexo.data.PanelSide
 import com.stree.nexo.data.PanelStyle
 import com.stree.nexo.data.ClipboardHistoryStore
 import com.stree.nexo.data.Prefs
+import com.stree.nexo.data.SearchRepository
 import com.stree.nexo.data.UsageStore
 import com.stree.nexo.media.MediaControlService
 import com.stree.nexo.panel.EdgePanelService
@@ -255,7 +259,7 @@ fun SettingsScreen(
         // Apartado 4: Temas y apariencia del panel
         if (activeFilter == SettingsSectionFilter.THEMES) {
             item {
-                PanelAppearanceCard()
+                PanelAppearanceCard(onRefresh = onRefresh)
             }
         }
 
@@ -958,7 +962,7 @@ private fun PermissionStatusChip(
 }
 
 @Composable
-private fun PanelAppearanceCard() {
+private fun PanelAppearanceCard(onRefresh: () -> Unit) {
     val context = LocalContext.current
     var style by remember { mutableStateOf(Prefs.panelStyle(context)) }
     var width by remember { mutableFloatStateOf(Prefs.panelWidth(context)) }
@@ -1210,6 +1214,181 @@ private fun PanelAppearanceCard() {
                 onValueChange = { spacing = it },
                 onValueChangeFinished = { Prefs.setPanelItemSpacing(context, spacing.roundToInt()) }
             )
+        }
+
+        SectionDivider()
+        IconPackSelectorBlock(onRefresh = onRefresh)
+    }
+}
+
+@Composable
+private fun IconPackSelectorBlock(onRefresh: () -> Unit) {
+    val context = LocalContext.current
+    var selectedPack by remember { mutableStateOf(Prefs.iconPackPackage(context)) }
+    var packs by remember { mutableStateOf<List<IconPackInfo>?>(null) }
+
+    LaunchedEffect(Unit) {
+        packs = withContext(Dispatchers.IO) {
+            IconPackManager.listInstalledIconPacks(context)
+        }
+    }
+
+    fun selectPack(pkg: String?) {
+        Haptics.perform(context)
+        selectedPack = pkg
+        Prefs.setIconPackPackage(context, pkg)
+        SearchRepository.invalidateCache()
+        onRefresh()
+    }
+
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "PACK DE ICONOS",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                letterSpacing = 0.8.sp,
+                modifier = Modifier.weight(1f)
+            )
+            ValuePill(
+                packs?.firstOrNull { it.packageName == selectedPack }?.label
+                    ?: "Sistema"
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            IconPackOptionRow(
+                label = "Sistema (por defecto)",
+                icon = null,
+                badge = null,
+                selected = selectedPack == null,
+                onClick = { selectPack(null) }
+            )
+
+            val installed = packs
+            if (installed == null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Text(
+                        text = "Buscando packs instalados…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else if (installed.isEmpty()) {
+                Text(
+                    text = "Instala cualquier pack de iconos o exporta uno desde Icon Pack Studio para elegirlo aquí.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            } else {
+                installed.forEach { pack ->
+                    IconPackOptionRow(
+                        label = pack.label,
+                        icon = pack.icon,
+                        badge = if (pack.packageName == "ginlemon.iconpackstudio.exported") "Icon Pack Studio" else null,
+                        selected = selectedPack == pack.packageName,
+                        onClick = { selectPack(pack.packageName) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun IconPackOptionRow(
+    label: String,
+    icon: android.graphics.drawable.Drawable?,
+    badge: String?,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val iconBitmap = remember(icon) {
+        icon?.let { runCatching { it.toBitmap(84, 84).asImageBitmap() }.getOrNull() }
+    }
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+        } else {
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.58f)
+        },
+        border = BorderStroke(
+            width = if (selected) 1.2.dp else 0.8.dp,
+            color = if (selected) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.72f)
+            } else {
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.30f)
+            }
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (iconBitmap != null) {
+                    Image(
+                        bitmap = iconBitmap,
+                        contentDescription = label,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.size(24.dp)
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Filled.Apps,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            if (badge != null) {
+                StatusBadge(text = badge, active = true)
+            }
+            if (selected) {
+                Icon(
+                    imageVector = Icons.Filled.CheckCircle,
+                    contentDescription = "Seleccionado",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
         }
     }
 }
@@ -1609,6 +1788,7 @@ private fun DynamicIslandCard() {
     var notifications by remember { mutableStateOf(Prefs.dynamicIslandNotifications(context)) }
     var hideLandscape by remember { mutableStateOf(Prefs.dynamicIslandHideLandscape(context)) }
     var hideOnLock by remember { mutableStateOf(Prefs.dynamicIslandHideOnLock(context)) }
+    var useThemeInIsland by remember { mutableStateOf(Prefs.dynamicIslandUseTheme(context)) }
     var compactFullscreen by remember { mutableStateOf(Prefs.dynamicIslandCompactFullscreen(context)) }
     var islandOpacity by remember { mutableIntStateOf(Prefs.dynamicIslandOpacity(context)) }
     var islandTextScale by remember { mutableIntStateOf(Prefs.dynamicIslandTextScale(context)) }
@@ -1901,6 +2081,16 @@ private fun DynamicIslandCard() {
                 onCheckedChange = {
                     hideOnLock = it
                     Prefs.setDynamicIslandHideOnLock(context, it)
+                    EdgePanelService.refreshIslandLive()
+                }
+            )
+            SwitchRow(
+                title = "Usar tema de Nexo en la Isla",
+                subtitle = "Aplica el estilo visual activo (bordes, brillos y Cristal líquido) en lugar de negro OLED puro",
+                checked = useThemeInIsland,
+                onCheckedChange = {
+                    useThemeInIsland = it
+                    Prefs.setDynamicIslandUseTheme(context, it)
                     EdgePanelService.refreshIslandLive()
                 }
             )

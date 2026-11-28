@@ -8,6 +8,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -60,11 +64,58 @@ internal fun PanelSurface(
         color = spec.surface.copy(alpha = spec.panelAlpha),
         contentColor = spec.onSurface,
         tonalElevation = 0.dp,
-        shadowElevation = if (style == PanelStyle.GLASS || style == PanelStyle.NEON) 26.dp else 22.dp
+        shadowElevation = when (style) {
+            PanelStyle.LIQUID_GLASS -> 12.dp
+            PanelStyle.GLASS, PanelStyle.NEON -> 26.dp
+            else -> 22.dp
+        }
     ) {
+        val specularModifier = if (style == PanelStyle.LIQUID_GLASS) {
+            Modifier.drawWithContent {
+                drawContent()
+                val minSide = size.minDimension.coerceAtLeast(1f)
+                // Reflejo especular superior izquierdo + destello sutil inferior derecho
+                drawRect(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.30f),
+                            Color(0xFF9BE7FF).copy(alpha = 0.10f),
+                            Color.Transparent
+                        ),
+                        center = Offset(size.width * 0.14f, size.height * 0.06f),
+                        radius = minSide * 0.85f
+                    )
+                )
+                drawRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.28f),
+                            Color.Transparent
+                        ),
+                        start = Offset(0f, 0f),
+                        end = Offset(0f, (size.height * 0.22f).coerceAtLeast(1f))
+                    )
+                )
+                drawRect(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color(0xFFD9B8FF).copy(alpha = 0.14f),
+                            Color.White.copy(alpha = 0.12f),
+                            Color.Transparent
+                        ),
+                        center = Offset(size.width * 0.88f, size.height * 0.94f),
+                        radius = minSide * 0.55f
+                    )
+                )
+            }
+        } else {
+            Modifier
+        }
+
         Column(
             (if (wrapHeight) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
-                .background(spec.sheenBrush),
+                .background(spec.sheenBrush)
+                .then(specularModifier),
             content = content
         )
     }

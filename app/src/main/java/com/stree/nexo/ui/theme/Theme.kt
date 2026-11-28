@@ -91,6 +91,7 @@ fun PanelStyle.visualSpec(light: Boolean = false): ThemeVisualSpec {
         val (primary, secondary, tertiary) = when (this) {
             PanelStyle.NEXO -> Triple(Color(0xFF4F46E5), Color(0xFF7C3AED), Color(0xFF06B6D4))
             PanelStyle.GLASS -> Triple(Color(0xFF1D5B79), Color(0xFF38BDF8), Color(0xFF64748B))
+            PanelStyle.LIQUID_GLASS -> Triple(Color(0xFF0284C7), Color(0xFF38BDF8), Color(0xFFA855F7))
             PanelStyle.MINT -> Triple(Color(0xFF047857), Color(0xFF10B981), Color(0xFF0D9488))
             PanelStyle.OCEAN -> Triple(Color(0xFF0369A1), Color(0xFF0284C7), Color(0xFF38BDF8))
             PanelStyle.AMBER -> Triple(Color(0xFFB45309), Color(0xFFD97706), Color(0xFFF59E0B))
@@ -98,6 +99,37 @@ fun PanelStyle.visualSpec(light: Boolean = false): ThemeVisualSpec {
             PanelStyle.SUNSET -> Triple(Color(0xFFBE123C), Color(0xFFE11D48), Color(0xFFF97316))
             PanelStyle.ROSE -> Triple(Color(0xFF9D174D), Color(0xFFDB2777), Color(0xFFA855F7))
             PanelStyle.MONO -> Triple(Color(0xFF18181B), Color(0xFF52525B), Color(0xFF71717A))
+        }
+        if (this == PanelStyle.LIQUID_GLASS) {
+            return ThemeVisualSpec(
+                style = this,
+                primary = primary,
+                onPrimary = Color.White,
+                secondary = secondary,
+                tertiary = tertiary,
+                background = Color(0xFFEFF8FF),
+                surface = Color(0xFFF4FAFF),
+                surfaceVariant = Color(0x52FFFFFF),
+                onSurface = Color(0xFF0D172A),
+                onSurfaceVariant = Color(0xFF283A52),
+                outlineVariant = Color(0x99FFFFFF),
+                panelAlpha = 0.28f,
+                borderWidthDp = 1.45f,
+                borderColors = listOf(
+                    Color(0xF5FFFFFF),
+                    Color(0xB89BE7FF),
+                    Color(0xA6D9B8FF),
+                    Color(0xE0FFFFFF)
+                ),
+                sheenColors = listOf(
+                    Color(0x66FFFFFF),
+                    Color(0x24A8E8FF),
+                    Color(0x14D9B8FF),
+                    Color(0x38FFFFFF)
+                ),
+                swatchColors = listOf(Color(0xFFF4FAFF), Color(0xFF9BE7FF), Color(0xFFD9B8FF)),
+                actionIconColors = listOf(primary, secondary, tertiary)
+            )
         }
         return ThemeVisualSpec(
             style = this,
@@ -183,6 +215,36 @@ fun PanelStyle.visualSpec(light: Boolean = false): ThemeVisualSpec {
                 Color.Black.copy(alpha = 0.22f)
             ),
             swatchColors = listOf(Color(0xFF0A1118), Color(0xFFB5E5FF), Color(0xFF64748B))
+        )
+
+        PanelStyle.LIQUID_GLASS -> ThemeVisualSpec(
+            style = this,
+            primary = Color(0xFFBBEAFF),
+            onPrimary = Color(0xFF0A2436),
+            secondary = Color(0xFF7DD3FC),
+            tertiary = Color(0xFFE9D5FF),
+            background = Color(0xFF182A3B),
+            surface = Color(0xFFE4F2FF),
+            surfaceVariant = Color(0x3DFFFFFF),
+            onSurface = Color(0xFFF8FCFF),
+            onSurfaceVariant = Color(0xFFEBF6FF),
+            outlineVariant = Color(0x99FFFFFF),
+            panelAlpha = 0.28f,
+            borderWidthDp = 1.45f,
+            borderColors = listOf(
+                Color(0xF5FFFFFF),
+                Color(0xB89BE7FF),
+                Color(0xA6D9B8FF),
+                Color(0xE0FFFFFF)
+            ),
+            sheenColors = listOf(
+                Color(0x66FFFFFF),
+                Color(0x24A8E8FF),
+                Color(0x14D9B8FF),
+                Color(0x38FFFFFF)
+            ),
+            swatchColors = listOf(Color(0xFFE4F2FF), Color(0xFF9BE7FF), Color(0xFFD9B8FF)),
+            actionIconColors = listOf(Color.White, Color(0xFF9BE7FF), Color(0xFFD9B8FF))
         )
 
         PanelStyle.MINT -> ThemeVisualSpec(

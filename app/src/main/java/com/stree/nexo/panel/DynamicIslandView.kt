@@ -28,7 +28,9 @@ import android.view.animation.DecelerateInterpolator
 import android.view.animation.LinearInterpolator
 import android.view.animation.OvershootInterpolator
 import androidx.compose.ui.graphics.toArgb
+import com.stree.nexo.data.PanelStyle
 import com.stree.nexo.data.Prefs
+import com.stree.nexo.ui.theme.ThemeVisualSpec
 import com.stree.nexo.ui.theme.visualSpec
 import kotlin.math.abs
 import kotlin.math.sin
@@ -83,7 +85,11 @@ data class IslandPlaylistCard(
     val title: String,
     val art: Bitmap? = null,
     val url: String? = null,
-    val queueId: Long? = null
+    val queueId: Long? = null,
+    val shortcutPackage: String? = null,
+    val shortcutId: String? = null,
+    val artistQuery: String? = null,
+    val packageName: String? = null
 )
 
 data class IslandDisplayState(
@@ -96,6 +102,7 @@ data class IslandDisplayState(
     val accentColor: Int? = null,
     val secondaryAccentColor: Int? = null,
     val playing: Boolean = false,
+    val shuffleActive: Boolean = false,
     val progressFraction: Float = 0f,
     val progressLeftText: String = "",
     val progressRightText: String = "",
@@ -138,7 +145,8 @@ interface IslandInteractionListener {
     fun onMediaPlayPause()
     fun onMediaNext()
     fun onMediaSeekTo(fraction: Float)
-    fun onMediaSeekBy(deltaMs: Long)
+    fun onMediaShuffle()
+    fun onMediaArtistRadio()
     fun onMediaOpenApp()
     fun onMediaLyrics()
     fun onMediaLyricsPage(delta: Int)
@@ -225,11 +233,11 @@ class DynamicIslandView(context: Context) : View(context) {
     // Hit-boxes interactivos
     private val pillRect = RectF()
     private val satelliteRect = RectF()
-    private val rewindRect = RectF()
+    private val shuffleRect = RectF()
     private val prevRect = RectF()
     private val playRect = RectF()
     private val nextRect = RectF()
-    private val forwardRect = RectF()
+    private val radioRect = RectF()
     private val mediaHeaderRect = RectF()
     private val mediaFloatRect = RectF()
     private val lyricsToggleRect = RectF()
@@ -299,9 +307,26 @@ class DynamicIslandView(context: Context) : View(context) {
         color = Color.WHITE
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     }
+    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+    }
+    private val sheenPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+    private val wavePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+    private val waveLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val borderInsetRect = RectF()
     private val tempRect = RectF()
 
     private val clipPath = Path()
+    private val glyphPath = Path()
+    private val wavePath = Path()
     private val iconRect = RectF()
 
     private fun cameraTopSafeDp(): Int {
@@ -804,11 +829,11 @@ class DynamicIslandView(context: Context) : View(context) {
                     state.lyricsPaging && lyricsPreviousRect.contains(x, y) -> listener?.onMediaLyricsPage(-1)
                     state.lyricsPaging && lyricsNextRect.contains(x, y) -> listener?.onMediaLyricsPage(1)
                     mediaFloatRect.contains(x, y) -> listener?.onMediaOpenFloating()
-                    rewindRect.contains(x, y) -> listener?.onMediaSeekBy(-10_000L)
+                    shuffleRect.contains(x, y) -> listener?.onMediaShuffle()
                     prevRect.contains(x, y) -> listener?.onMediaPrev()
                     playRect.contains(x, y) -> listener?.onMediaPlayPause()
                     nextRect.contains(x, y) -> listener?.onMediaNext()
-                    forwardRect.contains(x, y) -> listener?.onMediaSeekBy(10_000L)
+                    radioRect.contains(x, y) -> listener?.onMediaArtistRadio()
                     mediaHeaderRect.contains(x, y) -> listener?.onMediaOpenApp()
                     else -> listener?.onTapMain(state.mode)
                 }
@@ -860,7 +885,9 @@ class DynamicIslandView(context: Context) : View(context) {
             return
         }
 
-        val spec = Prefs.panelStyle(context).visualSpec(light = false)
+        val panelStyle = Prefs.panelStyle(context)
+        val spec = panelStyle.visualSpec(light = false)
+        val useTheme = Prefs.dynamicIslandUseTheme(context) && state.mode != IslandMode.IDLE_PILL
         val primaryArgb = spec.primary.toArgb()
         val secondaryArgb = spec.secondary.toArgb()
         val accentArgb = state.accentColor ?: primaryArgb
@@ -891,21 +918,30 @@ class DynamicIslandView(context: Context) : View(context) {
             else -> drawH / 2f
         }
 
-        // Cápsula principal: Negro OLED puro (#000000) o semitransparente durante guía de calibración
-        bgPaint.color = if (state.calibrationGuide && state.mode == IslandMode.IDLE_PILL && state.hideIdleVisual) {
-            Color.argb(170, 0, 0, 0)
+        // Cápsula principal: Negro OLED puro (#000000) en IDLE_PILL o cuando el tema está desactivado;
+        // con tema activo usa la paleta, brillo líquido y borde especular del PanelStyle elegido.
+        if (useTheme) {
+            drawThemedCapsule(canvas, pillRect, cornerRadius, isOval = false, spec = spec, style = panelStyle)
         } else {
-            Color.argb(backgroundAlpha, 0, 0, 0)
+            bgPaint.color = if (state.calibrationGuide && state.mode == IslandMode.IDLE_PILL && state.hideIdleVisual) {
+                Color.argb(170, 0, 0, 0)
+            } else {
+                Color.argb(backgroundAlpha, 0, 0, 0)
+            }
+            canvas.drawRoundRect(pillRect, cornerRadius, cornerRadius, bgPaint)
         }
-        canvas.drawRoundRect(pillRect, cornerRadius, cornerRadius, bgPaint)
 
         // Burbuja satélite independiente (modo burbuja dividida estilo iPhone)
         if (showSat) {
             val satLeft = pillRect.right + satGap
             val satTop = pillRect.centerY() - satDiameter / 2f
             satelliteRect.set(satLeft, satTop, satLeft + satDiameter, satTop + satDiameter)
-            bgPaint.color = Color.argb(backgroundAlpha, 0, 0, 0)
-            canvas.drawOval(satelliteRect, bgPaint)
+            if (useTheme) {
+                drawThemedCapsule(canvas, satelliteRect, satDiameter / 2f, isOval = true, spec = spec, style = panelStyle)
+            } else {
+                bgPaint.color = Color.argb(backgroundAlpha, 0, 0, 0)
+                canvas.drawOval(satelliteRect, bgPaint)
+            }
             drawSatelliteContent(canvas, accentArgb, secondaryAccentArgb)
         } else {
             satelliteRect.setEmpty()
@@ -1334,7 +1370,19 @@ class DynamicIslandView(context: Context) : View(context) {
             canvas.drawCircle(thumbX, barY, thumbR, chipPaint)
         }
 
-        // Fila de 5 controles: -10s | Anterior | Play/Pausa | Siguiente | +10s
+        // Onda sonora animada sutil a lo largo del fondo de los controles de transporte
+        drawBottomSoundwave(
+            canvas = canvas,
+            left = pillRect.left + padH,
+            right = pillRect.right - padH,
+            bottomY = playerBottom - dp(4f),
+            maxHeight = controlsH * 0.88f,
+            primaryArgb = primaryArgb,
+            secondaryArgb = secondaryArgb,
+            playing = state.playing
+        )
+
+        // Fila de 5 controles: Aleatorio | Anterior | Play/Pausa | Siguiente | Radio del artista
         val availBtnW = (pillRect.width() - padH * 2f).coerceAtLeast(dp(180f))
         val gap = dp(7f)
         val playW = (availBtnW * 0.25f).coerceIn(dp(50f), dp(72f))
@@ -1342,19 +1390,22 @@ class DynamicIslandView(context: Context) : View(context) {
         val totalW = sideW * 4f + playW + gap * 4f
         val startX = pillRect.centerX() - totalW / 2f
 
-        rewindRect.set(startX, controlsCy - controlsH / 2f, startX + sideW, controlsCy + controlsH / 2f)
-        prevRect.set(rewindRect.right + gap, controlsCy - controlsH / 2f, rewindRect.right + gap + sideW, controlsCy + controlsH / 2f)
+        shuffleRect.set(startX, controlsCy - controlsH / 2f, startX + sideW, controlsCy + controlsH / 2f)
+        prevRect.set(shuffleRect.right + gap, controlsCy - controlsH / 2f, shuffleRect.right + gap + sideW, controlsCy + controlsH / 2f)
         playRect.set(prevRect.right + gap, controlsCy - controlsH / 2f, prevRect.right + gap + playW, controlsCy + controlsH / 2f)
         nextRect.set(playRect.right + gap, controlsCy - controlsH / 2f, playRect.right + gap + sideW, controlsCy + controlsH / 2f)
-        forwardRect.set(nextRect.right + gap, controlsCy - controlsH / 2f, nextRect.right + gap + sideW, controlsCy + controlsH / 2f)
+        radioRect.set(nextRect.right + gap, controlsCy - controlsH / 2f, nextRect.right + gap + sideW, controlsCy + controlsH / 2f)
 
-        val sideBg = Color.argb(24, 255, 255, 255)
-        chipPaint.color = sideBg
-        canvas.drawRoundRect(rewindRect, controlsH / 2f, controlsH / 2f, chipPaint)
-        badgePaint.textSize = dp(10.5f)
-        badgePaint.color = Color.argb(225, 236, 240, 248)
-        val seekBaseline = controlsCy - (badgePaint.descent() + badgePaint.ascent()) / 2f
-        canvas.drawText("-10", rewindRect.centerX(), seekBaseline, badgePaint)
+        val sideBg = Color.argb(26, 255, 255, 255)
+        chipPaint.color = if (state.shuffleActive) withAlpha(primaryArgb, 78) else sideBg
+        canvas.drawRoundRect(shuffleRect, controlsH / 2f, controlsH / 2f, chipPaint)
+        drawShuffleGlyph(
+            canvas = canvas,
+            cx = shuffleRect.centerX(),
+            cy = shuffleRect.centerY(),
+            r = dp(6.6f),
+            color = if (state.shuffleActive) primaryArgb else Color.argb(232, 238, 242, 250)
+        )
 
         chipPaint.color = sideBg
         canvas.drawRoundRect(prevRect, controlsH / 2f, controlsH / 2f, chipPaint)
@@ -1384,9 +1435,14 @@ class DynamicIslandView(context: Context) : View(context) {
         drawSkipGlyph(canvas, nextRect.centerX(), nextRect.centerY(), dp(7.2f), next = true)
 
         chipPaint.color = sideBg
-        canvas.drawRoundRect(forwardRect, controlsH / 2f, controlsH / 2f, chipPaint)
-        badgePaint.color = Color.argb(225, 236, 240, 248)
-        canvas.drawText("+10", forwardRect.centerX(), seekBaseline, badgePaint)
+        canvas.drawRoundRect(radioRect, controlsH / 2f, controlsH / 2f, chipPaint)
+        drawRadioGlyph(
+            canvas = canvas,
+            cx = radioRect.centerX(),
+            cy = radioRect.centerY(),
+            r = dp(6.8f),
+            color = Color.argb(232, 238, 242, 250)
+        )
 
         // Reset hit rects del footer antes de dibujarlo
         lyricsToggleRect.setEmpty()
@@ -2103,6 +2159,196 @@ class DynamicIslandView(context: Context) : View(context) {
             dp(1f),
             fillGlyphPaint
         )
+    }
+
+    private fun drawThemedCapsule(
+        canvas: Canvas,
+        rect: RectF,
+        cornerRadius: Float,
+        isOval: Boolean,
+        spec: ThemeVisualSpec,
+        style: PanelStyle
+    ) {
+        val surfaceArgb = spec.surface.toArgb()
+        val fillFactor = if (style == PanelStyle.LIQUID_GLASS) 0.72f else spec.panelAlpha.coerceIn(0.84f, 0.98f)
+        val fillAlpha = (backgroundAlpha * fillFactor).toInt().coerceIn(120, 255)
+        bgPaint.color = withAlpha(surfaceArgb, fillAlpha)
+        if (isOval) {
+            canvas.drawOval(rect, bgPaint)
+        } else {
+            canvas.drawRoundRect(rect, cornerRadius, cornerRadius, bgPaint)
+        }
+
+        // Brillo líquido superior recortado a la cápsula
+        val sheenInts = spec.sheenColors.map { it.toArgb() }.toIntArray()
+        if (sheenInts.size >= 2) {
+            clipPath.reset()
+            if (isOval) {
+                clipPath.addOval(rect, Path.Direction.CW)
+            } else {
+                clipPath.addRoundRect(rect, cornerRadius, cornerRadius, Path.Direction.CW)
+            }
+            canvas.save()
+            canvas.clipPath(clipPath)
+            val sheenBottom = rect.top + rect.height() * if (style == PanelStyle.LIQUID_GLASS) 0.62f else 0.48f
+            sheenPaint.shader = LinearGradient(
+                rect.left, rect.top, rect.left, sheenBottom,
+                sheenInts,
+                null,
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawRect(rect.left, rect.top, rect.right, sheenBottom, sheenPaint)
+            sheenPaint.shader = null
+            canvas.restore()
+        }
+
+        // Borde especular degradado del tema
+        val borderInts = spec.borderColors.map { it.toArgb() }.toIntArray()
+        if (borderInts.size >= 2) {
+            val strokePx = dp(if (style == PanelStyle.LIQUID_GLASS) 1.35f else spec.borderWidthDp.coerceIn(0.9f, 1.5f))
+            borderPaint.strokeWidth = strokePx
+            borderPaint.shader = LinearGradient(
+                rect.left, rect.top, rect.right, rect.bottom,
+                borderInts,
+                null,
+                Shader.TileMode.CLAMP
+            )
+            val inset = strokePx * 0.5f
+            borderInsetRect.set(rect.left + inset, rect.top + inset, rect.right - inset, rect.bottom - inset)
+            if (isOval) {
+                canvas.drawOval(borderInsetRect, borderPaint)
+            } else {
+                canvas.drawRoundRect(
+                    borderInsetRect,
+                    (cornerRadius - inset).coerceAtLeast(0f),
+                    (cornerRadius - inset).coerceAtLeast(0f),
+                    borderPaint
+                )
+            }
+            borderPaint.shader = null
+        }
+    }
+
+    private fun drawBottomSoundwave(
+        canvas: Canvas,
+        left: Float,
+        right: Float,
+        bottomY: Float,
+        maxHeight: Float,
+        primaryArgb: Int,
+        secondaryArgb: Int,
+        playing: Boolean
+    ) {
+        val span = (right - left).coerceAtLeast(dp(60f))
+        val barCount = 26
+        val slotW = span / barCount
+        val barW = (slotW * 0.44f).coerceIn(dp(2f), dp(3.5f))
+        val barAlpha = if (playing) 58 else 24
+        val lineAlpha = if (playing) 68 else 28
+
+        wavePaint.shader = LinearGradient(
+            left, bottomY, right, bottomY,
+            intArrayOf(
+                withAlpha(primaryArgb, (barAlpha * 0.45f).toInt()),
+                withAlpha(primaryArgb, barAlpha),
+                withAlpha(secondaryArgb, barAlpha),
+                withAlpha(secondaryArgb, (barAlpha * 0.45f).toInt())
+            ),
+            floatArrayOf(0f, 0.28f, 0.72f, 1f),
+            Shader.TileMode.CLAMP
+        )
+
+        wavePath.reset()
+        for (i in 0 until barCount) {
+            val norm = (i + 0.5f) / barCount.toFloat()
+            val envelope = sin(norm * Math.PI).toFloat().coerceIn(0.15f, 1f)
+            val wave = if (playing) {
+                val w1 = 0.5f + 0.5f * sin(eqPhase + i * 0.58f)
+                val w2 = 0.5f + 0.5f * sin(eqPhase * 1.6f - i * 0.37f)
+                (0.22f + 0.78f * (w1 * 0.62f + w2 * 0.38f)) * envelope
+            } else {
+                (0.16f + 0.14f * sin(i * 0.65f + 0.4f)) * envelope
+            }
+            val barH = (maxHeight * wave).coerceAtLeast(dp(2.5f))
+            val cx = left + (i + 0.5f) * slotW
+            val topY = bottomY - barH
+            canvas.drawRoundRect(
+                cx - barW / 2f,
+                topY,
+                cx + barW / 2f,
+                bottomY,
+                barW / 2f,
+                barW / 2f,
+                wavePaint
+            )
+            if (i == 0) {
+                wavePath.moveTo(cx, topY)
+            } else {
+                val prevCx = left + (i - 0.5f) * slotW
+                wavePath.quadTo((prevCx + cx) * 0.5f, topY, cx, topY)
+            }
+        }
+        wavePaint.shader = null
+
+        waveLinePaint.strokeWidth = dp(1.3f)
+        waveLinePaint.shader = LinearGradient(
+            left, bottomY, right, bottomY,
+            intArrayOf(
+                withAlpha(primaryArgb, 0),
+                withAlpha(primaryArgb, lineAlpha),
+                withAlpha(secondaryArgb, lineAlpha),
+                withAlpha(secondaryArgb, 0)
+            ),
+            floatArrayOf(0f, 0.22f, 0.78f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawPath(wavePath, waveLinePaint)
+        waveLinePaint.shader = null
+    }
+
+    private fun drawShuffleGlyph(canvas: Canvas, cx: Float, cy: Float, r: Float, color: Int) {
+        iconPaint.color = color
+        iconPaint.strokeWidth = dp(1.55f)
+        val dx = r * 0.85f
+        val dy = r * 0.56f
+        val arrow = r * 0.34f
+        glyphPath.reset()
+        // Rama superior izquierda -> inferior derecha
+        glyphPath.moveTo(cx - dx, cy - dy)
+        glyphPath.lineTo(cx - dx * 0.28f, cy - dy)
+        glyphPath.lineTo(cx + dx * 0.28f, cy + dy)
+        glyphPath.lineTo(cx + dx, cy + dy)
+        // Flecha inferior derecha
+        glyphPath.moveTo(cx + dx - arrow, cy + dy - arrow)
+        glyphPath.lineTo(cx + dx, cy + dy)
+        glyphPath.lineTo(cx + dx - arrow, cy + dy + arrow)
+        // Rama inferior izquierda -> superior derecha
+        glyphPath.moveTo(cx - dx, cy + dy)
+        glyphPath.lineTo(cx - dx * 0.28f, cy + dy)
+        glyphPath.lineTo(cx + dx * 0.28f, cy - dy)
+        glyphPath.lineTo(cx + dx, cy - dy)
+        // Flecha superior derecha
+        glyphPath.moveTo(cx + dx - arrow, cy - dy - arrow)
+        glyphPath.lineTo(cx + dx, cy - dy)
+        glyphPath.lineTo(cx + dx - arrow, cy - dy + arrow)
+        canvas.drawPath(glyphPath, iconPaint)
+    }
+
+    private fun drawRadioGlyph(canvas: Canvas, cx: Float, cy: Float, r: Float, color: Int) {
+        fillGlyphPaint.color = color
+        canvas.drawCircle(cx, cy, r * 0.22f, fillGlyphPaint)
+        iconPaint.color = color
+        iconPaint.strokeWidth = dp(1.5f)
+        // Ondas interiores (izquierda y derecha)
+        val rInner = r * 0.55f
+        tempRect.set(cx - rInner, cy - rInner, cx + rInner, cy + rInner)
+        canvas.drawArc(tempRect, -48f, 96f, false, iconPaint)
+        canvas.drawArc(tempRect, 132f, 96f, false, iconPaint)
+        // Ondas exteriores (izquierda y derecha)
+        val rOuter = r * 0.92f
+        tempRect.set(cx - rOuter, cy - rOuter, cx + rOuter, cy + rOuter)
+        canvas.drawArc(tempRect, -54f, 108f, false, iconPaint)
+        canvas.drawArc(tempRect, 126f, 108f, false, iconPaint)
     }
 
     private fun withAlpha(color: Int, alpha: Int): Int =

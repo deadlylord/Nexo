@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import android.widget.Toast
@@ -16,6 +17,7 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.stree.nexo.data.PanelStyle
 import com.stree.nexo.data.Prefs
 import com.stree.nexo.data.Haptics
 import com.stree.nexo.panel.EdgePanelService
@@ -57,6 +59,12 @@ class SearchActivity : ComponentActivity() {
             WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING or
                 WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
         )
+        if (Prefs.panelStyle(this) == PanelStyle.LIQUID_GLASS && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            runCatching {
+                window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+                window.attributes = window.attributes.apply { blurBehindRadius = 40 }
+            }
+        }
 
         EdgePanelService.setPanelOpen(true)
 

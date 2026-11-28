@@ -1,14 +1,19 @@
 package com.stree.nexo.media
 
+import android.app.SearchManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.LauncherApps
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.os.Process
+import android.provider.MediaStore
 import android.service.notification.NotificationListenerService
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -16,6 +21,14 @@ data class QueueTrack(
     val queueId: Long,
     val title: String,
     val art: android.graphics.Bitmap? = null
+)
+
+data class IslandShortcutItem(
+    val id: String,
+    val label: String,
+    val packageName: String,
+    val shortcutId: String,
+    val icon: android.graphics.Bitmap? = null
 )
 
 data class NowPlaying(
@@ -30,7 +43,8 @@ data class NowPlaying(
     val positionMs: Long = 0L,
     val positionUpdateTimeMs: Long = 0L,
     val playbackSpeed: Float = 1f,
-    val queue: List<QueueTrack> = emptyList()
+    val queue: List<QueueTrack> = emptyList(),
+    val isShuffleActive: Boolean = false
 )
 
 enum class OpenMusicResult {
@@ -104,6 +118,109 @@ class MediaControlService : NotificationListenerService() {
                 true
             }.getOrDefault(false)
         }
+
+        fun toggleShuffle(): Boolean {
+            val controller = playback.value?.controller ?: return false
+            val actions = controller.playbackState?.customActions ?: return false
+            val shuffleAction = actions.firstOrNull { action ->
+                val id = action.action.orEmpty()
+                val name = action.name?.toString().orEmpty()
+                id.contains("SHUFFLE", ignoreCase = true) ||
+                    name.contains("shuffle", ignoreCase = true) ||
+                    name.contains("aleatorio", ignoreCase = true) ||
+                    id.contains("MIX", ignoreCase = true)
+            } ?: return false
+            return runCatching {
+                controller.transportControls.sendCustomAction(shuffleAction, null)
+                true
+            }.getOrDefault(false)
+        }
+
+        fun playArtistRadio(
+            context: Context,
+            artist: String?,
+            title: String?,
+            packageName: String?
+        ): Boolean {
+            val cleanArtist = artist?.trim()?.takeIf { it.isNotEmpty() }
+            val cleanTitle = title?.trim()?.takeIf { it.isNotEmpty() }
+            val query = cleanArtist ?: cleanTitle ?: run {
+                return openPlayingApp(context) == OpenMusicResult.OPENED
+            }
+
+            fun buildSearchIntent(targetPkg: String?): Intent =
+                Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH).apply {
+                    putExtra(
+                        MediaStore.EXTRA_MEDIA_FOCUS,
+                        MediaStore.Audio.Artists.ENTRY_CONTENT_TYPE
+                    )
+                    if (cleanArtist != null) {
+                        putExtra(MediaStore.EXTRA_MEDIA_ARTIST, cleanArtist)
+                    }
+                    putExtra(SearchManager.QUERY, query)
+                    if (!targetPkg.isNullOrBlank()) setPackage(targetPkg)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+
+            val pkg = packageName?.takeIf { it.isNotBlank() }
+            if (pkg != null) {
+                val targeted = runCatching {
+                    context.startActivity(buildSearchIntent(pkg))
+                    true
+                }.getOrDefault(false)
+                if (targeted) return true
+            }
+
+            val generic = runCatching {
+                context.startActivity(buildSearchIntent(null))
+                true
+            }.getOrDefault(false)
+            if (generic) return true
+
+            return openPlayingApp(context) == OpenMusicResult.OPENED
+        }
+
+        fun loadPlayerShortcuts(context: Context, packageName: String): List<IslandShortcutItem> {
+            if (packageName.isBlank()) return emptyList()
+            val launcherApps = context.getSystemService(LauncherApps::class.java) ?: return emptyList()
+            if (!launcherApps.hasShortcutHostPermission()) return emptyList()
+            val user = Process.myUserHandle()
+            val density = context.resources.displayMetrics.densityDpi
+            val query = LauncherApps.ShortcutQuery().apply {
+                setPackage(packageName)
+                setQueryFlags(
+                    LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or
+                        LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED
+                )
+            }
+            val shortcuts = runCatching { launcherApps.getShortcuts(query, user) }
+                .getOrNull().orEmpty()
+            return shortcuts.mapNotNull { sc ->
+                val label = (sc.shortLabel ?: sc.longLabel)?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: return@mapNotNull null
+                val iconBmp = runCatching {
+                    launcherApps.getShortcutIconDrawable(sc, density)
+                        ?.toBitmap(120, 120, android.graphics.Bitmap.Config.ARGB_8888)
+                }.getOrNull()
+                IslandShortcutItem(
+                    id = "sc_${packageName}_${sc.id}",
+                    label = label,
+                    packageName = packageName,
+                    shortcutId = sc.id,
+                    icon = iconBmp
+                )
+            }.take(8)
+        }
+
+        fun launchPlayerShortcut(context: Context, packageName: String, shortcutId: String): Boolean {
+            if (packageName.isBlank() || shortcutId.isBlank()) return false
+            val launcherApps = context.getSystemService(LauncherApps::class.java) ?: return false
+            if (!launcherApps.hasShortcutHostPermission()) return false
+            return runCatching {
+                launcherApps.startShortcut(packageName, shortcutId, null, null, Process.myUserHandle())
+                true
+            }.getOrDefault(false)
+        }
     }
 
     private val manager by lazy { getSystemService(MediaSessionManager::class.java) }
@@ -164,6 +281,7 @@ class MediaControlService : NotificationListenerService() {
                         QueueTrack(queueId = item.queueId, title = title, art = iconBmp)
                     }
             }.getOrDefault(emptyList())
+            val shuffleActive = detectShuffleActive(pb)
             NowPlaying(
                 title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)
                     ?: metadata?.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE) ?: "Reproducción multimedia",
@@ -177,8 +295,43 @@ class MediaControlService : NotificationListenerService() {
                 positionMs = pb?.position?.coerceAtLeast(0L) ?: 0L,
                 positionUpdateTimeMs = pb?.lastPositionUpdateTime ?: android.os.SystemClock.elapsedRealtime(),
                 playbackSpeed = pb?.playbackSpeed ?: 1f,
-                queue = queueItems
+                queue = queueItems,
+                isShuffleActive = shuffleActive
             )
+        }
+    }
+
+    private fun detectShuffleActive(pb: PlaybackState?): Boolean {
+        if (pb == null) return false
+        val extras = pb.extras
+        if (extras != null) {
+            runCatching {
+                for (key in extras.keySet()) {
+                    if (key.contains("shuffle", ignoreCase = true)) {
+                        @Suppress("DEPRECATION")
+                        val v = extras.get(key)
+                        when (v) {
+                            is Boolean -> if (v) return true
+                            is Int -> if (v > 0) return true
+                            is Long -> if (v > 0L) return true
+                        }
+                    }
+                }
+            }
+        }
+        val actions = pb.customActions ?: return false
+        return actions.any { action ->
+            val id = action.action.orEmpty().lowercase()
+            val name = action.name?.toString().orEmpty().lowercase()
+            val isShuffle = "shuffle" in id || "shuffle" in name || "aleatorio" in name
+            if (!isShuffle) false
+            else {
+                ("on" in id && "off" !in id) ||
+                    ("enabled" in id && "disabled" !in id) ||
+                    "disable_shuffle" in id ||
+                    "turn_off_shuffle" in id ||
+                    "shuffle_active" in id
+            }
         }
     }
 
