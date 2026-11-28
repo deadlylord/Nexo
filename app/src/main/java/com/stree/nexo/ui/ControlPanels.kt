@@ -5,6 +5,7 @@ import android.content.Intent
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
+import android.provider.AlarmClock
 import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
@@ -328,24 +329,26 @@ internal fun ControlPanelPage(
                                 showTimerPicker = true
                             }
 
-                            ControlPainterTile(
-                                painter = painterResource(R.drawable.ic_voice_assistant),
-                                contentDescription = "Asistente de voz",
+                            ControlIconTile(
+                                icon = Icons.Filled.Alarm,
+                                contentDescription = "Alarmas",
+                                active = false,
                                 iconBrush = iconBrush,
-                                bg = idleBg,
-                                border = themeSpec.outlineVariant.copy(alpha = 0.36f),
+                                activeBg = activeBg,
+                                activeBorder = activeBorder,
+                                idleBg = idleBg,
+                                idleBorder = idleBorder,
                                 modifier = Modifier.weight(1f).height(52.dp)
                             ) {
                                 Haptics.perform(context)
-                                val voice = Intent(Intent.ACTION_VIEW, Uri.parse("https://chatgpt.com/voice"))
-                                    .setPackage("com.openai.chatgpt")
+                                val showAlarms = Intent(AlarmClock.ACTION_SHOW_ALARMS)
                                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                val opened = runCatching { context.startActivity(voice); true }.getOrDefault(false)
+                                val opened = runCatching { context.startActivity(showAlarms); true }.getOrDefault(false)
                                 if (!opened) {
-                                    val app = context.packageManager.getLaunchIntentForPackage("com.openai.chatgpt")
-                                        ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    if (app == null || runCatching { context.startActivity(app) }.isFailure) {
-                                        context.controlMessage("Instala ChatGPT para usar el asistente")
+                                    val setAlarm = Intent(AlarmClock.ACTION_SET_ALARM)
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    if (runCatching { context.startActivity(setAlarm) }.isFailure) {
+                                        context.controlMessage("No se encontró una app de reloj o alarmas")
                                     }
                                 }
                             }

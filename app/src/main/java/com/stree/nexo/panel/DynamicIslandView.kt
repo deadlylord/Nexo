@@ -1370,18 +1370,6 @@ class DynamicIslandView(context: Context) : View(context) {
             canvas.drawCircle(thumbX, barY, thumbR, chipPaint)
         }
 
-        // Onda sonora animada sutil a lo largo del fondo de los controles de transporte
-        drawBottomSoundwave(
-            canvas = canvas,
-            left = pillRect.left + padH,
-            right = pillRect.right - padH,
-            bottomY = playerBottom - dp(4f),
-            maxHeight = controlsH * 0.88f,
-            primaryArgb = primaryArgb,
-            secondaryArgb = secondaryArgb,
-            playing = state.playing
-        )
-
         // Fila de 5 controles: Aleatorio | Anterior | Play/Pausa | Siguiente | Radio del artista
         val availBtnW = (pillRect.width() - padH * 2f).coerceAtLeast(dp(180f))
         val gap = dp(7f)
@@ -2227,83 +2215,6 @@ class DynamicIslandView(context: Context) : View(context) {
             }
             borderPaint.shader = null
         }
-    }
-
-    private fun drawBottomSoundwave(
-        canvas: Canvas,
-        left: Float,
-        right: Float,
-        bottomY: Float,
-        maxHeight: Float,
-        primaryArgb: Int,
-        secondaryArgb: Int,
-        playing: Boolean
-    ) {
-        val span = (right - left).coerceAtLeast(dp(60f))
-        val barCount = 26
-        val slotW = span / barCount
-        val barW = (slotW * 0.44f).coerceIn(dp(2f), dp(3.5f))
-        val barAlpha = if (playing) 58 else 24
-        val lineAlpha = if (playing) 68 else 28
-
-        wavePaint.shader = LinearGradient(
-            left, bottomY, right, bottomY,
-            intArrayOf(
-                withAlpha(primaryArgb, (barAlpha * 0.45f).toInt()),
-                withAlpha(primaryArgb, barAlpha),
-                withAlpha(secondaryArgb, barAlpha),
-                withAlpha(secondaryArgb, (barAlpha * 0.45f).toInt())
-            ),
-            floatArrayOf(0f, 0.28f, 0.72f, 1f),
-            Shader.TileMode.CLAMP
-        )
-
-        wavePath.reset()
-        for (i in 0 until barCount) {
-            val norm = (i + 0.5f) / barCount.toFloat()
-            val envelope = sin(norm * Math.PI).toFloat().coerceIn(0.15f, 1f)
-            val wave = if (playing) {
-                val w1 = 0.5f + 0.5f * sin(eqPhase + i * 0.58f)
-                val w2 = 0.5f + 0.5f * sin(eqPhase * 1.6f - i * 0.37f)
-                (0.22f + 0.78f * (w1 * 0.62f + w2 * 0.38f)) * envelope
-            } else {
-                (0.16f + 0.14f * sin(i * 0.65f + 0.4f)) * envelope
-            }
-            val barH = (maxHeight * wave).coerceAtLeast(dp(2.5f))
-            val cx = left + (i + 0.5f) * slotW
-            val topY = bottomY - barH
-            canvas.drawRoundRect(
-                cx - barW / 2f,
-                topY,
-                cx + barW / 2f,
-                bottomY,
-                barW / 2f,
-                barW / 2f,
-                wavePaint
-            )
-            if (i == 0) {
-                wavePath.moveTo(cx, topY)
-            } else {
-                val prevCx = left + (i - 0.5f) * slotW
-                wavePath.quadTo((prevCx + cx) * 0.5f, topY, cx, topY)
-            }
-        }
-        wavePaint.shader = null
-
-        waveLinePaint.strokeWidth = dp(1.3f)
-        waveLinePaint.shader = LinearGradient(
-            left, bottomY, right, bottomY,
-            intArrayOf(
-                withAlpha(primaryArgb, 0),
-                withAlpha(primaryArgb, lineAlpha),
-                withAlpha(secondaryArgb, lineAlpha),
-                withAlpha(secondaryArgb, 0)
-            ),
-            floatArrayOf(0f, 0.22f, 0.78f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        canvas.drawPath(wavePath, waveLinePaint)
-        waveLinePaint.shader = null
     }
 
     private fun drawShuffleGlyph(canvas: Canvas, cx: Float, cy: Float, r: Float, color: Int) {

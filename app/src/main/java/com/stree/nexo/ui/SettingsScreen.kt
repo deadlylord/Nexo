@@ -2085,12 +2085,13 @@ private fun DynamicIslandCard() {
                 }
             )
             SwitchRow(
-                title = "Usar tema de Nexo en la Isla",
-                subtitle = "Aplica el estilo visual activo (bordes, brillos y Cristal líquido) en lugar de negro OLED puro",
-                checked = useThemeInIsland,
-                onCheckedChange = {
-                    useThemeInIsland = it
-                    Prefs.setDynamicIslandUseTheme(context, it)
+                title = "Isla en negro OLED independiente",
+                subtitle = "Mantiene la Isla Dinámica en negro puro aunque el panel use Cristal líquido u otro tema",
+                checked = !useThemeInIsland,
+                onCheckedChange = { forceBlack ->
+                    val useTheme = !forceBlack
+                    useThemeInIsland = useTheme
+                    Prefs.setDynamicIslandUseTheme(context, useTheme)
                     EdgePanelService.refreshIslandLive()
                 }
             )

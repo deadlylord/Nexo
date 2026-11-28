@@ -175,7 +175,7 @@ class ActivatorControlsActivity : ComponentActivity() {
                                 val tabItems = remember {
                                     listOf(
                                         Icons.Filled.Tune to "Brillo y sonido",
-                                        Icons.AutoMirrored.Filled.VolumeOff to "Silencio y asistente"
+                                        Icons.AutoMirrored.Filled.VolumeOff to "Silencio y alarmas"
                                     )
                                 }
                                 val activePillColor = themeSpec.primary.copy(alpha = 0.16f)
@@ -191,7 +191,7 @@ class ActivatorControlsActivity : ComponentActivity() {
                                     val pageMode = modes[realIndex(page)]
                                     val pageTitle = when (pageMode) {
                                         "display_audio" -> "Brillo y sonido"
-                                        "actions" -> "Silencio y asistente"
+                                        "actions" -> "Silencio y alarmas"
                                         else -> null
                                     }
                                     Box(
